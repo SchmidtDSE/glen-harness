@@ -98,10 +98,12 @@ A JVM application that needs an agent could run this harness as a separate Node 
 ## Development
 
 ```bash
-npm install
-npm test
-npm run build:vendor   # only when bumping @modelcontextprotocol/sdk; see src/vendor/README.md
+corepack pnpm install
+pnpm test
+pnpm run build:vendor   # only when bumping @modelcontextprotocol/sdk; see src/vendor/README.md
 ```
+
+Development dependencies are installed with pnpm, pinned in `package.json`. The settings in `pnpm-workspace.yaml` stop dependencies from running install scripts and hold back any version less than a week old.
 
 CI runs the tests and checks that `src/vendor/mcp-sdk.js` matches a fresh build.
 
