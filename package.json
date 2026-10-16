@@ -1,0 +1,35 @@
+{
+  "name": "glen-harness",
+  "version": "0.1.0",
+  "description": "Agent harness for GLEN apps: an OpenAI-compatible tool-use loop, a local + MCP tool registry, and an MCP client, in plain ES modules that run unchanged in browsers and Node",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SchmidtDSE/glen-harness.git"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./agent.js": "./src/agent.js",
+    "./tool-registry.js": "./src/tool-registry.js",
+    "./mcp-client.js": "./src/mcp-client.js"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.include='src/**'",
+    "build:vendor": "esbuild scripts/mcp-sdk-entry.js --bundle --format=esm --platform=browser --minify --legal-comments=eof --outfile=src/vendor/mcp-sdk.js"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.12.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "esbuild": "0.28.2",
+    "vitest": "^2.1.9"
+  }
+}
