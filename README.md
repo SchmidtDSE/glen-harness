@@ -81,19 +81,21 @@ This follows the pattern geo-agent already uses for the MCP SDK (geo-agent#343).
 
 Importing directly from a jsDelivr URL also works in the browser, but Node and vitest cannot resolve `https:` imports, so geo-agent's tests would need an alias to a second copy installed from npm or git.
 
-## Why JavaScript
+## Design principles
 
-Colleagues have asked whether the harness should be written for the JVM or compiled to WebAssembly. We think plain JavaScript is the better fit, for these reasons.
+**Tools come from MCP servers.** A tool server can be written in any language and run anywhere; the harness sees only its tool list. Local tools are kept for controlling the host page, such as the map in geo-agent.
 
-**The harness spends nearly all of its time waiting on the network.** Each round is an HTTP request to a language model, which takes seconds to minutes, followed by a request to an MCP server, where DuckDB does the data work. The harness's own computation (parsing JSON, matching a few regular expressions) is small by comparison, so a faster runtime would not make answers arrive sooner.
+**The transport is stateless Streamable HTTP.** One contract covers a server on a cluster, on the same machine at `localhost`, or on an offline machine. TLS, authentication, network policy and request logs apply to it, and a stateless server scales as interchangeable copies. Long jobs return an id that a second tool checks.
 
-**GLEN apps run the agent in the browser, next to the map it controls.** JavaScript is the browser's own language. Code compiled to WebAssembly still reaches `fetch` and the page through JavaScript glue, and JVM code reaches the browser only through a compiler such as TeaVM or CheerpJ. Either adds a build step and a second toolchain to an app that currently has neither.
+**The model gets as few capabilities as the task needs.** It can act only through the tools it is given. We prefer narrow tools over a domain (run a query, edit a simulation) to general file or shell access, and each tool server sees only its own data.
 
-**The same files already run on the server.** The headless benchmark runner in open-llm-proxy imports geo-agent's `agent.js` into Node to compare models against the live MCP server. It also has to keep its own copy of `mcp-client.js` with a drift check, which this package would replace. We ran this package's example in Node 22 against the live MCP server, including a full loop in which the model's SQL ran on the server and the result came back to the model.
+**The harness runs inside the browser sandbox.** A page can reach only the endpoints it is allowed to, and a Content-Security-Policy can list exactly the model endpoint and the MCP servers. Files and chats stay in the browser unless a tool sends them.
 
-**The harness is small, and its tests describe its behaviour.** The loop is about 1,200 lines. Most of it records failure modes we have seen in production across model providers, such as tool calls emitted as text in several dialects, truncated arguments, and repeated failing calls. Each has a test (231 in this repository). Those tests would have to be carried over to any reimplementation.
+**Any OpenAI-compatible model endpoint works,** hosted or local.
 
-A JVM application that needs an agent could run this harness as a separate Node process or a small HTTP service. If an in-process JVM harness is needed, the MCP project publishes an official Java SDK, and the tests here can serve as the specification for a port.
+**There is no build step and nothing to resolve at runtime.** The harness is plain files served at a pinned version. Its one dependency, the MCP SDK, is a single committed file that CI rebuilds and compares. Development dependencies are installed without running their install scripts.
+
+**The same files run in the browser and in Node,** so tests, benchmarks and command-line tools exercise the code that users run.
 
 ## Development
 
