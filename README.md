@@ -89,7 +89,7 @@ Importing directly from a jsDelivr URL also works in the browser, but Node and v
 
 **The model gets as few capabilities as the task needs.** It can act only through the tools it is given. We prefer narrow tools over a domain (run a query, edit a simulation) to general file or shell access, and each tool server sees only its own data.
 
-**The harness runs inside the browser sandbox.** A page can reach only the endpoints it is allowed to, and a Content-Security-Policy can list exactly the model endpoint and the MCP servers. Files and chats stay in the browser unless a tool sends them.
+**The harness runs inside the browser sandbox.** A page can reach only the endpoints it is allowed to, and a Content-Security-Policy can list exactly the model endpoint and the MCP servers. Files and chats stay in the browser, apart from what is sent to the model endpoint and the tool servers.
 
 **Any OpenAI-compatible model endpoint works,** hosted or local.
 
