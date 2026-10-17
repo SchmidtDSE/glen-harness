@@ -13,7 +13,8 @@
     ".": "./src/index.js",
     "./agent.js": "./src/agent.js",
     "./tool-registry.js": "./src/tool-registry.js",
-    "./mcp-client.js": "./src/mcp-client.js"
+    "./mcp-client.js": "./src/mcp-client.js",
+    "./post-message-transport.js": "./src/post-message-transport.js"
   },
   "files": [
     "src"

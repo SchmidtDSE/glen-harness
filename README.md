@@ -10,7 +10,8 @@ This is a draft. The code was extracted from [boettiger-lab/geo-agent](https://g
 |---|---|
 | `src/agent.js` | `Agent`: the tool-use loop against any OpenAI-compatible Chat Completions endpoint. Handles retries and timeouts, user abort, approval of tool calls, checkpoints after a set number of tool rounds, output-length limits, reasoning/thinking controls, prompt-cache breakpoints, and recovery of tool calls that models emit as text in non-standard dialects. |
 | `src/tool-registry.js` | `ToolRegistry`: one dispatch for local tools (functions in the same process, such as map controls) and remote tools (on an MCP server). Converts tool schemas to the OpenAI function-calling format and memoizes idempotent metadata reads. |
-| `src/mcp-client.js` | `MCPClient`: Streamable HTTP connection to an MCP server, with lazy reconnect. |
+| `src/mcp-client.js` | `MCPClient`: connection to an MCP server, with lazy reconnect. Streamable HTTP by default; pass `{ transport: () => … }` for any other MCP transport. |
+| `src/post-message-transport.js` | `PostMessageTransport`: MCP over `postMessage`, for a server running in a Web Worker in the same page. |
 | `src/vendor/mcp-sdk.js` | The MCP SDK, pre-bundled so that no import map or third-party module host is needed. See [`src/vendor/README.md`](src/vendor/README.md). |
 
 The harness has no DOM code and no dependencies beyond the vendored MCP SDK. A host application connects its UI through callbacks on the `Agent` (`onToolProposal`, `onToolResults`, `onResponse`, `onCheckpoint`, and others).

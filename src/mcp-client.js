@@ -1,7 +1,9 @@
 /**
  * MCPClient - Standalone MCP transport wrapper
  * 
- * Manages the connection to a remote MCP server (Streamable HTTP).
+ * Manages the connection to an MCP server: remote over Streamable HTTP by
+ * default, or over any MCP transport the caller supplies (e.g. a
+ * PostMessageTransport to a server running in a Web Worker).
  * Handles: connect, lazy reconnect on failure, callTool, listTools, readResource.
  * 
  * No knowledge of SQL, LLMs, or the DOM — pure transport.
@@ -18,16 +20,20 @@ import { Client, StreamableHTTPClientTransport } from './vendor/mcp-sdk.js';
 
 export class MCPClient {
     /**
-     * @param {string} serverUrl - Streamable HTTP endpoint of the MCP server
+     * @param {string} serverUrl - Streamable HTTP endpoint of the MCP server.
+     *   With `options.transport` it is only a label for logs.
      * @param {Object} [headers] - Sent on every request (e.g. Authorization)
      * @param {Object} [options]
      * @param {{name: string, version: string}} [options.clientInfo] - How this
      *   client identifies itself in the MCP handshake.
+     * @param {() => Object} [options.transport] - Returns a fresh MCP transport
+     *   for each connect (and reconnect), in place of Streamable HTTP.
      */
     constructor(serverUrl, headers = {}, options = {}) {
         this.serverUrl = serverUrl;
         this.headers = headers;
         this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.1.0' };
+        this.transportFactory = options.transport ?? null;
         this.client = null;
         this.connected = false;
         this.tools = [];
@@ -72,9 +78,11 @@ export class MCPClient {
     async _doConnect() {
         try {
             console.log('[MCP] Auth header present:', !!this.headers['Authorization'], 'URL:', this.serverUrl);
-            const transport = new StreamableHTTPClientTransport(new URL(this.serverUrl), {
-                requestInit: { headers: this.headers }
-            });
+            const transport = this.transportFactory
+                ? this.transportFactory()
+                : new StreamableHTTPClientTransport(new URL(this.serverUrl), {
+                    requestInit: { headers: this.headers }
+                });
             this.client = new Client(
                 this.clientInfo,
                 { capabilities: {} }
