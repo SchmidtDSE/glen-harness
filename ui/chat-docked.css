@@ -64,6 +64,9 @@
 }
 
 #chat-container.chat-docked {
+    /* Recomputed here so that a --control-bg set on an ancestor of the chat
+       also changes the hover colour, which on :root mixes the root's value. */
+    --control-bg-hover: color-mix(in srgb, var(--control-bg) 88%, var(--control-mix-target));
     position: relative;
     inset: auto;
     width: auto;
