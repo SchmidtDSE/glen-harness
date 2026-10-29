@@ -1,7 +1,7 @@
 {
   "name": "glen-harness",
   "version": "0.1.0",
-  "description": "Agent harness for GLEN apps: an OpenAI-compatible tool-use loop, a local + MCP tool registry, and an MCP client, in plain ES modules that run unchanged in browsers and Node",
+  "description": "Agent harness for GLEN apps: an OpenAI-compatible tool-use loop, a local + MCP tool registry, an MCP client and a chat interface, in plain ES modules that run unchanged in browsers and Node",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@12.10.1",
@@ -14,10 +14,18 @@
     "./agent.js": "./src/agent.js",
     "./tool-registry.js": "./src/tool-registry.js",
     "./mcp-client.js": "./src/mcp-client.js",
-    "./post-message-transport.js": "./src/post-message-transport.js"
+    "./post-message-transport.js": "./src/post-message-transport.js",
+    "./ui": "./ui/index.js",
+    "./ui/chat-ui.js": "./ui/chat-ui.js",
+    "./ui/layout.js": "./ui/layout.js",
+    "./ui/deps.js": "./ui/deps.js",
+    "./ui/export-report.js": "./ui/export-report.js",
+    "./ui/chat.css": "./ui/chat.css",
+    "./ui/chat-docked.css": "./ui/chat-docked.css"
   },
   "files": [
-    "src"
+    "src",
+    "ui"
   ],
   "engines": {
     "node": ">=20"
@@ -25,13 +33,16 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.include='src/**'",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.include='{src,ui}/**'",
     "build:vendor": "esbuild scripts/mcp-sdk-entry.js --bundle --format=esm --platform=browser --minify --legal-comments=eof --outfile=src/vendor/mcp-sdk.js"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.12.0",
     "@vitest/coverage-v8": "^2.1.9",
+    "dompurify": "3.4.8",
     "esbuild": "0.28.2",
+    "jsdom": "26.1.0",
+    "marked": "18.0.5",
     "vitest": "^2.1.9"
   }
 }

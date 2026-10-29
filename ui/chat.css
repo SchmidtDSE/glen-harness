@@ -1,0 +1,1041 @@
+/* ───────────────────────────────────────────────────────────
+   Chat Interface – Glass morphism + collapsible tool blocks
+   ─────────────────────────────────────────────────────────── */
+
+/* ── Container ──────────────────────────────────────────── */
+
+#chat-container {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    width: 500px;
+    height: 620px;
+    display: flex;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    z-index: var(--z-sidebar, 30);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+#chat-container.collapsed #chat-messages,
+#chat-container.collapsed #chat-input-container,
+#chat-container.collapsed #chat-footer {
+    display: none;
+}
+
+/* !important overrides any inline style.height set by the floating-resize
+   drag handle, so the container always shrinks to just the header. */
+#chat-container.collapsed {
+    height: auto !important;
+}
+
+/* ── Resize handle ──────────────────────────────────────── */
+
+.resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 18px;
+    height: 18px;
+    cursor: nw-resize;
+    z-index: 10;
+    border-radius: 12px 0 0 0;
+    opacity: 0.35;
+    transition: opacity 0.15s;
+}
+
+.resize-handle::before,
+.resize-handle::after {
+    content: '';
+    position: absolute;
+    background: rgba(100, 100, 120, 0.7);
+    border-radius: 1px;
+}
+
+/* Two small diagonal lines as a grip indicator */
+.resize-handle::before {
+    width: 8px;
+    height: 1.5px;
+    top: 7px;
+    left: 4px;
+    transform: rotate(-45deg);
+}
+
+.resize-handle::after {
+    width: 5px;
+    height: 1.5px;
+    top: 10px;
+    left: 5px;
+    transform: rotate(-45deg);
+}
+
+.resize-handle:hover {
+    opacity: 0.8;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+
+#chat-header {
+    padding: 12px 15px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#chat-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+#chat-toggle {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #666;
+    padding: 4px;
+    line-height: 1;
+}
+
+#chat-toggle:hover {
+    color: #333;
+}
+
+/* ── Messages area ──────────────────────────────────────── */
+
+#chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+/* Scrollbar */
+#chat-messages::-webkit-scrollbar {
+    width: 5px;
+}
+
+#chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+}
+
+#chat-messages::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.25);
+}
+
+/* ── Input area ─────────────────────────────────────────── */
+
+#chat-input-container {
+    padding: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+#chat-input {
+    flex: 1;
+    padding: 9px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.45);
+    color: #333;
+    font-size: 14px;
+    font-family: inherit;
+    line-height: 1.4;
+    resize: none;
+    max-height: 8em;
+    overflow-y: auto;
+}
+
+#chat-input:focus {
+    outline: none;
+    border-color: rgba(0, 122, 255, 0.5);
+    background: rgba(255, 255, 255, 0.65);
+}
+
+#chat-send {
+    padding: 9px 16px;
+    background: rgba(0, 122, 255, 0.8);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+#chat-send:hover {
+    background: rgba(0, 122, 255, 1);
+}
+
+#chat-send:disabled {
+    background: rgba(128, 128, 128, 0.4);
+    cursor: not-allowed;
+}
+
+#chat-send.stop {
+    background: #dc3545;
+    padding: 9px 18px;
+}
+
+#chat-send.stop:hover {
+    background: #c82333;
+}
+
+/* ── Voice input ─────────────────────────────────────────── */
+
+/* A secondary control: a small line icon in the panel's text colour, no fill
+   or border until hover, so Send stays the loudest thing in the row. */
+#chat-mic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    background: transparent;
+    color: var(--chat-fg);
+    opacity: 0.7;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    line-height: 0;
+}
+
+#chat-mic:hover,
+#chat-mic:focus-visible {
+    opacity: 1;
+    border-color: color-mix(in srgb, var(--chat-fg) 25%, transparent);
+}
+
+/* Live: the icon turns red and pulses gently; no solid fill. */
+#chat-mic.recording {
+    color: var(--danger-fg);
+    opacity: 1;
+    animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #chat-mic.recording { animation: none; }
+}
+
+/* ── Footer / model selector ────────────────────────────── */
+
+#chat-footer {
+    padding: 5px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#chat-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+}
+
+/* ── Header links (docs + github) ───────────────────────── */
+
+.header-links {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.header-link {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    opacity: 0.45;
+    transition: opacity 0.15s;
+    line-height: 1;
+}
+
+.header-link:hover {
+    opacity: 0.85;
+}
+
+.docs-link {
+    font-size: 11px;
+    font-weight: 500;
+    color: #333;
+    letter-spacing: 0.2px;
+}
+
+.github-link svg {
+    fill: #333;
+    display: block;
+}
+
+/* Footer links (github, docs, carbon) live in #chat-footer's left zone. */
+#chat-footer .footer-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    margin-right: 4px;
+    color: rgba(255, 255, 255, 0.75);
+    text-decoration: none;
+    font-size: 11px;
+    border-radius: 3px;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+#chat-footer .footer-link:hover {
+    color: rgba(255, 255, 255, 1);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Footer left: carbon (leaf) link ──────────────────────
+   Selector matches #chat-footer .footer-link's specificity so
+   the leaf stays green instead of inheriting the white default. */
+#chat-footer .footer-link.carbon-link {
+    color: #2e7d32;
+    opacity: 0.85;
+}
+
+#chat-footer .footer-link.carbon-link:hover {
+    color: #2e7d32;
+    opacity: 1;
+    background: rgba(46, 125, 50, 0.1);
+}
+
+#chat-footer .footer-link svg {
+    display: block;
+}
+
+#model-selector {
+    font-size: 9px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: none;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+    outline: none;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.6;
+}
+
+#model-selector:hover {
+    opacity: 0.9;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Message bubbles ────────────────────────────────────── */
+
+.chat-message {
+    padding: 10px 12px;
+    border-radius: 8px;
+    max-width: 88%;
+    word-wrap: break-word;
+    line-height: 1.45;
+    font-size: 14px;
+}
+
+.chat-message.user {
+    align-self: flex-end;
+    background: rgba(0, 122, 255, 0.8);
+    color: #fff;
+}
+
+.chat-message.assistant {
+    align-self: flex-start;
+    background: rgba(255, 255, 255, 0.55);
+    color: #333;
+}
+
+.chat-message.system {
+    align-self: flex-start;
+    background: rgba(255, 255, 255, 0.35);
+    color: #555;
+    font-size: 12px;
+    font-style: italic;
+    max-width: 95%;
+}
+
+.chat-message.error {
+    align-self: center;
+    background: rgba(220, 53, 69, 0.25);
+    color: #721c24;
+    font-size: 12px;
+    max-width: 95%;
+}
+
+/* Send button in "Continue" mode — shown when a turn is suspended at a
+   checkpoint. Green reads as resume/go, distinct from the blue Send and the
+   red Stop. Resume lives in the input row now, not an inline message button. */
+#chat-send.continue {
+    background: #2e9e5b;
+}
+
+#chat-send.continue:hover {
+    background: #278a4f;
+}
+
+/* Abandon (✕) control — only visible while a turn is suspended; discards the
+   paused work so the next message starts fresh. Secondary, like the mic. */
+#chat-abandon {
+    padding: 9px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+
+#chat-abandon:hover {
+    background: rgba(220, 53, 69, 0.85);
+    border-color: rgba(220, 53, 69, 1);
+}
+
+/* Thinking indicator */
+.chat-message.assistant-thinking {
+    align-self: flex-start;
+    background: rgba(173, 216, 230, 0.35);
+    color: #2c5282;
+    border-left: 3px solid rgba(0, 122, 255, 0.5);
+    font-style: italic;
+    font-size: 13px;
+}
+
+/* Loading dots animation */
+.loading-dots::after {
+    content: '';
+    animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+
+    0%,
+    20% {
+        content: '';
+    }
+
+    40% {
+        content: '.';
+    }
+
+    60% {
+        content: '..';
+    }
+
+    80%,
+    100% {
+        content: '...';
+    }
+}
+
+/* ── Markdown in messages ───────────────────────────────── */
+
+.chat-message pre {
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.chat-message code {
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 0.9em;
+}
+
+.chat-message table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12px;
+    margin: 8px 0;
+}
+
+.chat-message th,
+.chat-message td {
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    padding: 4px 8px;
+    text-align: left;
+}
+
+.chat-message th {
+    background: rgba(0, 0, 0, 0.05);
+    font-weight: 600;
+}
+
+/* ── Welcome message ───────────────────────────────────── */
+
+.welcome-message p {
+    margin: 0 0 8px;
+}
+
+.welcome-examples {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.welcome-examples li {
+    display: contents;
+}
+
+.welcome-example-btn {
+    background: rgba(255, 255, 255, 0.45);
+    border: none;
+    border-radius: 14px;
+    padding: 5px 11px;
+    font-size: 12px;
+    color: #2c5282;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s;
+    line-height: 1.35;
+}
+
+.welcome-example-btn:hover {
+    background: rgba(255, 255, 255, 0.75);
+}
+
+/* ── Per-turn agent timeline ────────────────────────────── */
+
+.agent-turn {
+    align-self: stretch;
+    margin: 4px 0;
+    padding: 0;
+    background: transparent;
+    border-left: 2px solid rgba(0, 122, 255, 0.25);
+    border-radius: 0;
+}
+
+.agent-turn.done {
+    border-left-color: rgba(40, 167, 69, 0.4);
+}
+
+.agent-turn.error {
+    border-left-color: rgba(220, 53, 69, 0.5);
+}
+
+.agent-turn.cancelled {
+    border-left-color: rgba(108, 117, 125, 0.4);
+}
+
+.agent-turn > .agent-turn-summary {
+    padding: 4px 10px;
+    margin: 0;
+    cursor: pointer;
+    list-style: none;
+    font-size: 12px;
+    color: #4a5568;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.4;
+    user-select: none;
+}
+
+.agent-turn > .agent-turn-summary::-webkit-details-marker {
+    display: none;
+}
+
+.agent-turn > .agent-turn-summary::before {
+    content: '';
+    flex-shrink: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    transition: transform 0.15s ease;
+}
+
+.agent-turn[open] > .agent-turn-summary::before {
+    transform: rotate(90deg);
+}
+
+.agent-turn-icon.done {
+    color: #28a745;
+}
+.agent-turn-icon.error,
+.agent-turn-icon.cancelled {
+    color: #dc3545;
+}
+
+.agent-turn-body {
+    padding: 2px 0 4px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+/* Rows inside the timeline */
+.agent-turn-row {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.agent-turn-row.thinking {
+    padding: 2px 6px;
+    color: #6b7280;
+    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-turn-row-summary {
+    padding: 2px 6px;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #2c5282;
+    border-radius: 3px;
+    transition: background 0.1s ease;
+    user-select: none;
+}
+
+.agent-turn-row-summary::-webkit-details-marker {
+    display: none;
+}
+
+.agent-turn-row-summary::before {
+    content: '';
+    flex-shrink: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    opacity: 0.5;
+    transition: transform 0.15s ease;
+}
+
+details.agent-turn-row[open] > .agent-turn-row-summary::before {
+    transform: rotate(90deg);
+}
+
+.agent-turn-row-summary:hover {
+    background: rgba(0, 122, 255, 0.06);
+}
+
+.agent-turn-row .row-icon {
+    flex-shrink: 0;
+    font-size: 11px;
+    width: 14px;
+    text-align: center;
+}
+
+.agent-turn-row .row-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.agent-turn-row .row-status {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #6b7280;
+}
+
+.agent-turn-row .row-status.done {
+    color: #28a745;
+    font-weight: 600;
+}
+
+.agent-turn-row .row-status.error {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+.agent-turn-row.reasoning > .agent-turn-row-summary {
+    color: #6b7280;
+    font-style: italic;
+}
+
+.agent-turn-row-body {
+    padding: 4px 10px 6px 24px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #1a1a2e;
+}
+
+.agent-turn-row-body .tool-call-item,
+.agent-turn-row-body .tool-result-item {
+    margin: 4px 0;
+    padding: 0;
+    border: none;
+}
+
+.agent-turn-row-body .tool-results-list {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.agent-turn-row-body p:first-child {
+    margin-top: 0;
+}
+.agent-turn-row-body p:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Tool blocks (collapsible) ──────────────────────────── */
+
+.tool-reasoning {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+    padding: 0 2px;
+}
+
+.tool-reasoning p {
+    margin: 0;
+}
+
+.chat-message.tool-block {
+    align-self: flex-start;
+    background: rgba(245, 248, 255, 0.6);
+    max-width: 95%;
+    padding: 6px 10px;
+    border-left: 3px solid rgba(0, 122, 255, 0.35);
+}
+
+.query-summary-btn {
+    display: inline-block;
+    padding: 5px 10px 5px 22px;
+    margin: 2px 0;
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 5px;
+    color: #2c5282;
+    font-weight: 500;
+    font-size: 12px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.15s ease;
+    list-style: none;
+    /* Firefox */
+}
+
+.query-summary-btn::-webkit-details-marker {
+    display: none;
+}
+
+.query-summary-btn::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border-left: 5px solid #2c5282;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform 0.15s ease;
+}
+
+details[open]>.query-summary-btn::before {
+    transform: translateY(-50%) rotate(90deg);
+}
+
+.query-summary-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(0, 122, 255, 0.35);
+}
+
+.tool-detail {
+    padding: 6px 0;
+    font-size: 13px;
+}
+
+.tool-call-item,
+.tool-result-item {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.tool-call-item:last-child,
+.tool-result-item:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.tool-call-item strong,
+.tool-result-item strong {
+    font-size: 12px;
+    color: #2c5282;
+}
+
+.tool-tag {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.tool-tag.remote {
+    background: rgba(255, 152, 0, 0.15);
+    color: #e65100;
+}
+
+.tool-output {
+    max-height: 180px;
+    overflow-y: auto;
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.sql-detail {
+    margin: 4px 0;
+}
+
+.sql-detail summary {
+    font-size: 11px;
+    color: #4a90e2;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* ── Approval buttons ───────────────────────────────────── */
+
+.tool-approval-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.approve-btn {
+    padding: 7px 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    background: #28a745;
+    color: #fff;
+    transition: opacity 0.15s;
+}
+
+.approve-btn:hover:not(:disabled) {
+    opacity: 0.85;
+}
+
+.approve-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ── Auto-approve toggle ────────────────────────────────── */
+
+#auto-approve-btn {
+    background: none;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    color: rgba(0, 0, 0, 0.4);
+    padding: 2px 6px;
+    line-height: 1;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+    border-radius: 4px;
+}
+
+#auto-approve-btn:hover {
+    opacity: 0.9;
+}
+
+#auto-approve-btn.active {
+    opacity: 1;
+    color: #d97706;
+}
+
+#reasoning-btn {
+    background: none;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    color: rgba(0, 0, 0, 0.4);
+    padding: 2px 6px;
+    line-height: 1;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+    border-radius: 4px;
+}
+
+#reasoning-btn:hover {
+    opacity: 0.9;
+}
+
+#reasoning-btn.active {
+    opacity: 1;
+    color: #7c3aed;
+}
+
+#chat-footer #export-btn {
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.7);
+    cursor: pointer;
+    line-height: 1;
+    /* Enabled state must read as fully available — see :disabled below. */
+    opacity: 1;
+    filter: none;
+    transition: opacity 0.15s, filter 0.15s, background-color 0.15s;
+}
+
+#chat-footer #export-btn:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+#chat-footer #export-btn:disabled {
+    opacity: 0.35;
+    filter: grayscale(1);
+    cursor: not-allowed;
+}
+
+/* ── Settings panel (user-provided API key mode) ────────── */
+
+#settings-btn {
+    background: none;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    color: rgba(0, 0, 0, 0.4);
+    padding: 2px 6px;
+    line-height: 1;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+#settings-btn:hover {
+    opacity: 1;
+    color: rgba(0, 0, 0, 0.7);
+}
+
+#api-settings-panel {
+    padding: 14px;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.settings-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 10px;
+}
+
+.settings-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: #555;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+#api-settings-panel input {
+    width: 100%;
+    padding: 7px 10px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 5px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: rgba(255, 255, 255, 0.6);
+    color: #333;
+    box-sizing: border-box;
+}
+
+#api-settings-panel input:focus {
+    outline: none;
+    border-color: rgba(0, 122, 255, 0.5);
+}
+
+.settings-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.settings-save-btn {
+    padding: 6px 16px;
+    background: rgba(0, 122, 255, 0.8);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.settings-save-btn:hover {
+    background: rgba(0, 122, 255, 1);
+}
+
+.settings-cancel-btn {
+    padding: 6px 16px;
+    background: rgba(0, 0, 0, 0.06);
+    color: #555;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.settings-cancel-btn:hover {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+.settings-hint {
+    margin-top: 8px;
+    font-size: 10px;
+    color: rgba(0, 0, 0, 0.4);
+    font-style: italic;
+}
