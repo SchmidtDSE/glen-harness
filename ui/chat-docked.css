@@ -4,12 +4,14 @@
    (buildChatPanel in layout.js does). The rules are geo-agent's sidebar-mode
    chat rules (app/sidebar.css), scoped to .chat-docked.
 
-   Colours come from the tokens below, geo-agent's light palette. A host
-   restyles the chat by setting any of them on :root or on an ancestor of
-   the container, e.g. --control-bg for its primary colour.
+   Colours come from the tokens below, geo-agent's light palette. They are
+   declared under :where(:root), which has no specificity, so a host's own
+   :root or theme rules win whatever the load order. A host restyles the chat
+   by setting any of them on :root or on an ancestor of the container, e.g.
+   --control-bg for its primary colour.
    ─────────────────────────────────────────────────────────── */
 
-:root {
+:where(:root) {
     color-scheme: light;
     /* Native controls and scrollbars follow the palette too. */
     color-scheme: light;
