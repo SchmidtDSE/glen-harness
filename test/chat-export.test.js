@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     buildDuckdbSetupSql, buildSetupSnippet, wrapQuery, resolveExportConfig,
     CODE_LANGUAGES, PUBLIC_S3_ENDPOINT, scrubCredentials,
-} from '../ui/chat-ui.js';
+} from '../ui/export-report.js';
 import { GLEN_PROJECT_URL } from '../ui/export-report.js';
 
 describe('resolveExportConfig', () => {
@@ -318,7 +318,7 @@ import {
     buildMapEmbedHtml,
     EXPORT_MAP_MAPLIBRE_VERSION,
     EXPORT_MAP_PMTILES_VERSION,
-} from '../ui/chat-ui.js';
+} from '../ui/export-report.js';
 
 describe('buildMapEmbedHtml', () => {
     const sampleState = () => ({

@@ -12,43 +12,29 @@
 import { sqlArg } from '../src/tool-registry.js';
 import { githubIcon, leafIcon, micIcon, stopIcon } from './icons.js';
 
-import {
-    PUBLIC_S3_ENDPOINT,
-    resolveExportConfig,
-    buildDuckdbSetupSql,
-    CODE_LANGUAGES,
-    buildSetupSnippet,
-    wrapQuery,
-    scrubCredentials,
-    REDACTED_KEYS,
-    EXPORT_MAP_MAPLIBRE_VERSION,
-    EXPORT_MAP_PMTILES_VERSION,
-    buildMapEmbedHtml,
-    renderMarkdown,
-    buildReportHtml,
-    chartIdOf,
-    libraryVersion,
-    sessionDatasets,
-} from './export-report.js';
+import { renderMarkdown, scrubCredentials, REDACTED_KEYS } from './markdown.js';
+import { resolveExportConfig } from './export-config.js';
+
+/*
+ * The session export (export-report.js: the report builder, the DuckDB setup
+ * block and the R and Python wrappers) loads only when someone exports, with
+ * import() in exportHtml(). An app with `"export": false` never loads it.
+ */
+let exportReportModule = null;
+function loadExportReport() {
+    exportReportModule ??= import('./export-report.js').catch((err) => {
+        exportReportModule = null; // let the next click retry
+        throw err;
+    });
+    return exportReportModule;
+}
 
 /** Default target of the `links.carbon` footer link. */
 export const CARBON_DASHBOARD_URL = 'https://carbon-api.nrp-nautilus.io/';
 
-// Re-exported so existing importers (and tests) keep resolving them here.
-export {
-    PUBLIC_S3_ENDPOINT,
-    resolveExportConfig,
-    buildDuckdbSetupSql,
-    CODE_LANGUAGES,
-    buildSetupSnippet,
-    wrapQuery,
-    scrubCredentials,
-    REDACTED_KEYS,
-    EXPORT_MAP_MAPLIBRE_VERSION,
-    EXPORT_MAP_PMTILES_VERSION,
-    buildMapEmbedHtml,
-    renderMarkdown,
-};
+// Re-exported so existing importers keep resolving them here. The export's
+// heavier helpers are imported from ./export-report.js directly.
+export { renderMarkdown, scrubCredentials, REDACTED_KEYS, resolveExportConfig };
 
 
 export class ChatUI {
@@ -1166,9 +1152,20 @@ export class ChatUI {
      * per question, the SQL the agent ran as folded code chunks with their
      * output, the model's answer as prose, the final map as the figure, and
      * the full call log as an appendix. Built from the session record, not
-     * from the chat panel's DOM.
+     * from the chat panel's DOM. The report builder loads on first use.
+     *
+     * @returns {Promise<void>} settles once the download has been offered
      */
-    exportHtml() {
+    async exportHtml() {
+        let report;
+        try {
+            report = await loadExportReport();
+        } catch (err) {
+            console.error('[ChatUI] Export module failed to load:', err);
+            this.addMessage('error', "couldn't load the export — check your connection and try again");
+            return;
+        }
+        const { buildReportHtml, buildMapEmbedHtml, chartIdOf, libraryVersion, sessionDatasets } = report;
         const exportCfg = this.exportConfig || resolveExportConfig(this.config);
 
         // Capture the final map state (one map per saved log). Guarded so a
@@ -1208,7 +1205,7 @@ export class ChatUI {
             version: libraryVersion(),
             mapEmbed: buildMapEmbedHtml(mapState, { filename: this._exportFilename() }),
             basename: this._exportFilename().replace(/\.html$/, ''),
-            datasets: this._exportDatasets(),
+            datasets: this._exportDatasets(sessionDatasets),
         });
 
         try {
@@ -1232,7 +1229,7 @@ export class ChatUI {
      * The datasets the session used, for the report's Data sources section.
      * Guarded like the map: a failure costs the citations, not the export.
      */
-    _exportDatasets() {
+    _exportDatasets(sessionDatasets) {
         try {
             const entries = this.catalog?.getAll?.() || [];
             const onMap = [...(this.mapManager?.layers?.values?.() || [])]
