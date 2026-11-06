@@ -11,77 +11,26 @@
  */
 
 import { sqlArg, isFailedToolResult } from '../src/tool-registry.js';
+import {
+    GLEN_PROJECT_URL,
+    PUBLIC_S3_ENDPOINT,
+    CODE_LANGUAGES,
+    normalizeS3Host,
+    resolveExportConfig,
+} from './export-config.js';
+import { scrubCredentials, REDACTED_KEYS, renderMarkdown, escapeHtmlText } from './markdown.js';
 
-/**
- * Where the disclosure's "GLEN" link points: the project's deployed page,
- * not its GitHub repo. Apps override it with `export.project_url`.
- */
-export const GLEN_PROJECT_URL = 'https://boettiger-lab.github.io/geo-agent/';
-
-/**
- * Default public (anonymous) S3 endpoint for the exported setup block.
- * Mirrors the host that `dataset-catalog.js` strips when it converts asset
- * hrefs to `s3://` paths. Apps on other storage override it with
- * `public_s3_endpoint` in their config.
- */
-export const PUBLIC_S3_ENDPOINT = 's3-west.nrp-nautilus.io';
-
-/**
- * Strip a scheme and any trailing slashes from an S3 host, so a config that
- * spells the endpoint as a URL still produces a valid `ENDPOINT '…'`.
- *
- * @param {string} endpoint
- * @returns {string}
- */
-function normalizeS3Host(endpoint) {
-    return String(endpoint || PUBLIC_S3_ENDPOINT)
-        .replace(/^https?:\/\//, '')
-        .replace(/\/+$/, '');
-}
-
-/**
- * Resolve the app's export settings.
- *
- * Shape in `layers-input.json` (or the deploy-time `config.json`, which wins):
- *
- * ```json
- * "export": { "enabled": false }
- * "export": { "public_s3_endpoint": "minio.example.org" }
- * "export": { "project_url": "https://glen.example.org/" }
- * "export": false
- * ```
- *
- * Opt-*out*: absent config means the export is on, which is what the public
- * apps want. Private deployments turn it off, because the credential scrub
- * strips exactly what their exported queries would need — the recipient gets
- * a document whose code cannot run.
- *
- * `public_s3_endpoint` as a flat top-level key is the older spelling (#367)
- * and is still honoured, with the block winning when both are set.
- *
- * @param {object} [config] - merged app config
- * @returns {{ enabled: boolean, s3Endpoint: string, codeLanguage: string, projectUrl: string }}
- */
-export function resolveExportConfig(config = {}) {
-    // Deploy-time config.json arrives from k8s, where a boolean can land as
-    // the string "false"; treat both spellings as off.
-    const isOff = (v) => v === false || v === 'false';
-
-    const block = config?.export;
-    const blk = (block && typeof block === 'object') ? block : {};
-    const enabled = !isOff(block) && !isOff(blk.enabled);
-    const endpoint = blk.public_s3_endpoint || config?.public_s3_endpoint || PUBLIC_S3_ENDPOINT;
-
-    // Which language the exported document opens on. An unknown value falls
-    // back to SQL rather than showing an empty document — the reader can
-    // still switch in the file.
-    const wanted = String(blk.default_code_language ?? 'sql').toLowerCase();
-    const codeLanguage = CODE_LANGUAGES.some(l => l.id === wanted) ? wanted : 'sql';
-
-    const projectUrl = blk.project_url || GLEN_PROJECT_URL;
-
-    return { enabled, s3Endpoint: normalizeS3Host(endpoint), codeLanguage, projectUrl };
-}
+// Moved to export-config.js and markdown.js; re-exported so importers of this
+// module keep resolving them here.
+export {
+    GLEN_PROJECT_URL,
+    PUBLIC_S3_ENDPOINT,
+    CODE_LANGUAGES,
+    resolveExportConfig,
+    scrubCredentials,
+    REDACTED_KEYS,
+    renderMarkdown,
+};
 
 /**
  * DuckDB preamble that points `s3://` URLs at the public endpoint
@@ -124,18 +73,6 @@ CREATE OR REPLACE SECRET public_s3 (
     USE_SSL true
 );`;
 }
-
-/**
- * Code languages the export can present. SQL is what actually ran; R and
- * Python are thin wrappers around the identical query text, because most of
- * our users can drive R or Python and cannot write SQL — they just don't know
- * that `duckdb` hands SQL straight through in three lines.
- */
-export const CODE_LANGUAGES = [
-    { id: 'sql', label: 'SQL' },
-    { id: 'r', label: 'R' },
-    { id: 'python', label: 'Python' },
-];
 
 /**
  * Quote SQL as an R raw string, so nothing inside it needs escaping. Walks
@@ -285,52 +222,6 @@ const EXPORT_PRINT_SCRIPT = `<script>
   if (btn) btn.addEventListener('click', function () { window.print(); });
 })();
 <\/script>`;
-
-/**
- * Defense-in-depth credential scrub. Replaces credential-shaped tokens with
- * `[REDACTED]`. Each pattern requires a quoted value or structured
- * delimiter, so false positives in prose are unlikely.
- *
- * @param {string} text
- * @returns {string}
- */
-export function scrubCredentials(text) {
-    if (text === '' || text == null) return text;
-
-    let out = text;
-
-    // DuckDB CREATE SECRET — KEY_ID 'value' / SECRET 'value'. An empty value
-    // is the anonymous-access spelling and hides nothing, so it stays.
-    out = out.replace(/(KEY_ID)\s+'[^']+'/gi, '$1 [REDACTED]');
-    out = out.replace(/(\bSECRET)\s+'[^']+'/gi, '$1 [REDACTED]');
-
-    // json/yaml/python access key assignments
-    out = out.replace(
-        /((?:aws_)?access_key(?:_id)?)["']?\s*([:=])\s*(['"])[^'"]+\3/gi,
-        '$1$2 [REDACTED]'
-    );
-    out = out.replace(
-        /((?:aws_)?secret(?:_access)?_key)["']?\s*([:=])\s*(['"])[^'"]+\3/gi,
-        '$1$2 [REDACTED]'
-    );
-
-    // Bearer tokens
-    out = out.replace(/(Authorization:)\s*Bearer\s+\S+/gi, '$1 [REDACTED]');
-
-    // Pre-signed URL signature/credential
-    out = out.replace(/X-Amz-Signature=[^&\s'"]+/gi, 'X-Amz-Signature=[REDACTED]');
-    out = out.replace(/X-Amz-Credential=[^&\s'"]+/gi, 'X-Amz-Credential=[REDACTED]');
-    out = out.replace(/X-Amz-Security-Token=[^&\s'"]+/gi, 'X-Amz-Security-Token=[REDACTED]');
-
-    return out;
-}
-
-/**
- * Tool-call argument keys whose values are credentials and must never be
- * rendered to the chat or to any export. Used by both `renderToolCallArgs`
- * (live chat) and `exportHtml` (download).
- */
-export const REDACTED_KEYS = ['s3_key', 's3_secret', 's3_endpoint', 's3_scope', 'catalog_token'];
 
 /*
  * CDN builds used to re-hydrate the map in an exported transcript. Pinned to
@@ -500,35 +391,6 @@ export function buildMapEmbedHtml(state, options = {}) {
 </section>`;
 
     return { headTags, body };
-}
-
-/**
- * Render LLM-derived text to HTML for innerHTML insertion. The model can be
- * steered by anything it reads (dataset values, STAC descriptions), so its
- * output may carry attacker-controlled markup: scrub credential-shaped
- * tokens, parse markdown, then sanitize through DOMPurify. If either page
- * global is missing, fail closed to escaped plain text rather than raw HTML.
- *
- * @param {string} md
- * @returns {string} HTML safe to assign to innerHTML
- */
-export function renderMarkdown(md) {
-    const text = scrubCredentials(String(md ?? ''));
-    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-        return DOMPurify.sanitize(marked.parse(text));
-    }
-    if (!renderMarkdown._warned) {
-        renderMarkdown._warned = true;
-        console.warn('[ChatUI] marked and/or DOMPurify not loaded — chat text will render as escaped plain text. Check the CDN <script> tags in index.html.');
-    }
-    return `<pre>${escapeHtmlText(text)}</pre>`;
-}
-
-/** DOM-free HTML escape (renderMarkdown fallback path). */
-function escapeHtmlText(str) {
-    return String(str).replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
 }
 
 /* ------------------------------------------------------------------ */

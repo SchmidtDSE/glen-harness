@@ -246,7 +246,7 @@ describe('render_chart in the report', () => {
 });
 
 describe('ChatUI export: charts', () => {
-    it('asks the chart renderer for each chart the session drew', () => {
+    it('asks the chart renderer for each chart the session drew', async () => {
         let captured = '';
         const RealBlob = globalThis.Blob, realUrl = globalThis.URL;
         const realClick = window.HTMLAnchorElement.prototype.click;
@@ -266,7 +266,7 @@ describe('ChatUI export: charts', () => {
             ui.showToolProposal([{ id: 'a', type: 'function', function: { name: 'render_chart', arguments: '{"chart_type":"bar","x":"a","y":"b","data":[]}' } }], null, 1, true);
             ui.showToolResults([{ name: 'render_chart', success: true, source: 'local', result: '{"success":true,"chart_id":"chart-7"}' }], 1);
             ui.endTurn('done');
-            ui.exportHtml();
+            await ui.exportHtml();
             expect(asked).toEqual(['chart-7']);
             expect(captured).toContain('<svg id="drawn"></svg>');
         } finally {

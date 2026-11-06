@@ -1,6 +1,6 @@
 {
   "name": "glen-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent harness for GLEN apps: an OpenAI-compatible tool-use loop, a local + MCP tool registry, an MCP client and a chat interface, in plain ES modules that run unchanged in browsers and Node",
   "license": "Apache-2.0",
   "type": "module",
@@ -11,12 +11,15 @@
   },
   "exports": {
     ".": "./src/index.js",
+    "./core": "./src/core.js",
     "./agent.js": "./src/agent.js",
     "./tool-registry.js": "./src/tool-registry.js",
     "./mcp-client.js": "./src/mcp-client.js",
     "./post-message-transport.js": "./src/post-message-transport.js",
     "./ui": "./ui/index.js",
     "./ui/chat-ui.js": "./ui/chat-ui.js",
+    "./ui/markdown.js": "./ui/markdown.js",
+    "./ui/export-config.js": "./ui/export-config.js",
     "./ui/layout.js": "./ui/layout.js",
     "./ui/deps.js": "./ui/deps.js",
     "./ui/export-report.js": "./ui/export-report.js",

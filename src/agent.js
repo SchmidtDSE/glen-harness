@@ -752,7 +752,8 @@ export class Agent {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${modelConfig.api_key}`,
+                    // No header without a key, so basic-auth deployments keep working (glen#420).
+                    ...(modelConfig.api_key ? { 'Authorization': `Bearer ${modelConfig.api_key}` } : {}),
                     ...this._clientHeaders(endpoint),
                 },
                 body: JSON.stringify(payload),
