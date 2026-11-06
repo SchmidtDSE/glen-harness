@@ -8,7 +8,7 @@ This is a draft. The code was extracted from [boettiger-lab/geo-agent](https://g
 
 | Module | What it does |
 |---|---|
-| `src/agent.js` | `Agent`: the tool-use loop against any OpenAI-compatible Chat Completions endpoint. Handles retries and timeouts, user abort, approval of tool calls, checkpoints after a set number of tool rounds, output-length limits, reasoning/thinking controls, prompt-cache breakpoints, and recovery of tool calls that models emit as text in non-standard dialects. |
+| `src/agent.js` | `Agent`: the tool-use loop against any OpenAI-compatible Chat Completions endpoint. See [Agent loop](#agent-loop) for what it does. |
 | `src/tool-registry.js` | `ToolRegistry`: one dispatch for local tools (functions in the same process, such as map controls) and remote tools (on an MCP server). Converts tool schemas to the OpenAI function-calling format and memoizes idempotent metadata reads. |
 | `src/mcp-client.js` | `MCPClient`: connection to an MCP server, with lazy reconnect. Streamable HTTP by default; pass `{ transport: () => … }` for any other MCP transport. |
 | `src/post-message-transport.js` | `PostMessageTransport`: MCP over `postMessage`, for a server running in a Web Worker in the same page. |
@@ -16,6 +16,34 @@ This is a draft. The code was extracted from [boettiger-lab/geo-agent](https://g
 | `src/vendor/mcp-sdk.js` | The MCP SDK, pre-bundled so that no import map or third-party module host is needed. See [`src/vendor/README.md`](src/vendor/README.md). |
 
 The harness in `src/` has no DOM code and no dependencies beyond the vendored MCP SDK, which only `mcp-client.js` imports. A host application connects its UI through callbacks on the `Agent` (`onToolProposal`, `onToolResults`, `onResponse`, `onCheckpoint`, and others).
+
+## Agent loop
+
+`Agent` in `src/agent.js` does four jobs. Issue numbers below are in SchmidtDSE/glen, which was boettiger-lab/geo-agent when the code was written.
+
+### Tool-use loop
+
+`processMessage` sends the system prompt, the last 12 messages and the tool list to the model. When the reply contains tool calls, the agent runs them, adds the results to the conversation and calls the model again. It repeats until the model answers in text. Local tools always run without asking. Remote tools run once the host approves them through `onToolProposal`, or at once when auto-approve is on, which is the default. Each tool result is cut to 16,000 characters before it enters the conversation, so a large query result cannot fill the context window. `abort()` stops the turn at its next await, including during the model request.
+
+### Turn limits
+
+The agent pauses at a checkpoint after a set number of rounds that call remote tools: 15 with auto-approve (`max_tool_calls`) and 100 without (`max_tool_calls_manual`). At a checkpoint it asks the model for a progress summary without tools, keeps the turn, and resumes it when the user sends the next message, such as Continue. Rounds that call only local tools do not count toward that limit, so the same number of local-only rounds in a row also ends in a checkpoint; a model once looped on a failing local tool indefinitely ([glen#243](https://github.com/SchmidtDSE/glen/issues/243)). When every call in a round fails exactly as the round before did, the agent tells the model once that repeating the call will not help, and checkpoints if it repeats again ([glen#313](https://github.com/SchmidtDSE/glen/issues/313)). When a reply stops at the output limit, none of its tool calls run, because the last call's arguments may be incomplete; a text answer is shown with a note that it was cut off, and otherwise the turn ends with an error ([glen#387](https://github.com/SchmidtDSE/glen/issues/387)).
+
+### Request shaping
+
+Sampling parameters (`temperature`, `top_p`, `seed`, `max_tokens`) are read per model and then globally, and `temperature` defaults to 0 so that answers do not depend on each endpoint's own default. A model that the deployment opts in through `reasoning_toggle` or `reasoning_default` is sent `enable_thinking`, which open-llm-proxy maps to each backend's own setting ([glen#283](https://github.com/SchmidtDSE/glen/issues/283)). With `prompt_cache` set, the system prompt carries an Anthropic `cache_control` breakpoint ([glen#273](https://github.com/SchmidtDSE/glen/issues/273)). Each request times out after 600 seconds unless `llm_timeout_seconds` says otherwise, and a timeout, network error or 5xx response is retried once. The `X-Client` header goes only to trusted proxy hosts (`nrp-nautilus.io` by default, or `client_header_hosts`), because a custom header on any other endpoint can fail the browser's CORS check ([glen#254](https://github.com/SchmidtDSE/glen/issues/254)). A model without an `api_key` is sent no `Authorization` header, so a deployment behind basic auth keeps working ([glen#420](https://github.com/SchmidtDSE/glen/issues/420)).
+
+### Tool-call recovery
+
+Some models put reasoning or tool calls where the protocol does not expect them, and this code moves them back.
+
+- `extractReasoning` takes reasoning from `reasoning_content` and from `<think>` blocks in the content, passes it to `onReasoning`, and removes it so it is not sent back to the model.
+- `parseEmbeddedToolCalls` and its helpers find tool calls written into the content: `<tool_call>` and `<tool_code>` wrappers with missing or mismatched closing tags, bare JSON call objects, the nested OpenAI shape, `parameters` used for `arguments`, and the `<function=NAME>` dialect ([glen#288](https://github.com/SchmidtDSE/glen/issues/288), [glen#295](https://github.com/SchmidtDSE/glen/issues/295)). `syntheticToolCalls` turns them into ordinary tool calls, and `stripEmbeddedCalls` removes the call text from what the user sees.
+- `looksLikeAttemptedToolCall` detects text that looks like a tool call the parser could not read, and the agent asks the model to send the call again, at most twice a turn (`MAX_PARSE_RETRIES`) ([glen#288](https://github.com/SchmidtDSE/glen/issues/288), [glen#297](https://github.com/SchmidtDSE/glen/issues/297)).
+- `normalizeToolCallArguments` re-serializes the arguments of every native tool call as valid JSON before the reply enters the history. A malformed argument string, such as one with an extra closing brace, would otherwise make every later request in the session fail with a 400 error ([glen#288](https://github.com/SchmidtDSE/glen/issues/288)).
+- `scrubArgDialectLeaks` unwraps argument values that arrive wrapped in `<arg_value>` or `<parameter>` markers, as seen on GLM-5.2 ([glen#313](https://github.com/SchmidtDSE/glen/issues/313)).
+
+The reasons for keeping this code are recorded in glen's [tool-call parsing design note](https://github.com/SchmidtDSE/glen/blob/main/docs/design/tool-call-parsing.md). [#3](https://github.com/SchmidtDSE/glen-harness/issues/3) sets out the measurements that would show which of these paths the current models still need.
 
 ## Chat interface
 
