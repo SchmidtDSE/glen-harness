@@ -58,3 +58,24 @@ describe('X-Client attribution header, gated to trusted proxy hosts (#254)', () 
         expect(h['X-Client']).toBe('geo-agent/v3.14.0');
     });
 });
+
+describe('Authorization header (glen#420)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    const authFor = async (modelConfig) => {
+        let headers;
+        global.fetch = vi.fn(async (_url, opts) => { headers = opts.headers; return okResponse(); });
+        await makeAgent().callLLM('https://x/v1/chat/completions', modelConfig, [{ role: 'user', content: 'hi' }], []);
+        return headers;
+    };
+
+    it('sends a bearer token when the model has a key', async () => {
+        expect((await authFor({ api_key: 'k' }))['Authorization']).toBe('Bearer k');
+    });
+
+    it('sends no Authorization header without a key, so basic auth on the page still applies', async () => {
+        for (const cfg of [{}, { api_key: '' }, { api_key: null }]) {
+            expect(Object.keys(await authFor(cfg))).not.toContain('Authorization');
+        }
+    });
+});
