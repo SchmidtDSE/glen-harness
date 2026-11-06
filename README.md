@@ -62,7 +62,7 @@ The reasons for keeping this code are recorded in glen's [tool-call parsing desi
 | `ui/chat-docked.css` | Styles for the chat in a page column (geo-agent's sidebar look), coloured by CSS tokens a host can override, such as `--control-bg`. |
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.1';
 const [{ Agent, ToolRegistry }, { ChatUI, buildChatPanel, loadChatDeps }] =
     await Promise.all([import(`${H}/src/index.js`), import(`${H}/ui/index.js`)]);
 
@@ -82,7 +82,7 @@ ui.addElement(cardElement);   // show a table or chart a tool made
 An app whose tools all run in the page imports the `./core` entry (`src/core.js`) and the chat module:
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.1';
 const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
@@ -94,10 +94,10 @@ These load seven files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `
 In a browser, import from jsDelivr pinned to a tag. There is no build step.
 
 ```js
-import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.0/src/index.js';
+import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.2.1/src/index.js';
 ```
 
-In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.2.0`), as the package is not yet on npm:
+In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.2.1`), as the package is not yet on npm:
 
 ```js
 import { Agent, ToolRegistry, MCPClient } from 'glen-harness';

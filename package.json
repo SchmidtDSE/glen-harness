@@ -1,6 +1,6 @@
 {
   "name": "glen-harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agent harness for GLEN apps: an OpenAI-compatible tool-use loop, a local + MCP tool registry, an MCP client and a chat interface, in plain ES modules that run unchanged in browsers and Node",
   "license": "Apache-2.0",
   "type": "module",
