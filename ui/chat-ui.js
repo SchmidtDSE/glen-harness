@@ -336,8 +336,7 @@ export class ChatUI {
     /* ------------------------------------------------------------------ */
 
     initLinks() {
-        const links = this.config.links;
-        if (!links) return;
+        const links = this.config.links || {};
         // The app header renders the same links as top-level nav when one is
         // configured; showing them here too would duplicate every entry.
         if (this.linksAbsorbed) return;
@@ -384,6 +383,32 @@ export class ChatUI {
             a.title = 'Documentation';
             footer.prepend(a);
         }
+
+        // The host's own links go first, in the order it lists them.
+        for (const link of [...this.footerLinks(links)].reverse()) {
+            const a = document.createElement('a');
+            a.href = link.href;
+            a.className = `footer-link${link.className ? ` ${link.className}` : ''}`;
+            a.textContent = link.label;
+            if (link.title) a.title = link.title;
+            if (link.external) {
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+            }
+            footer.prepend(a);
+        }
+    }
+
+    /**
+     * Extra text links for the left of the chat footer, before About, GitHub
+     * and the carbon dashboard. Hosts override this; glen adds its data
+     * sources page here.
+     * @param {Object} links - the app's `links` config, or {} without one
+     * @returns {Array<{href: string, label: string, title?: string,
+     *   className?: string, external?: boolean}>}
+     */
+    footerLinks(links) {
+        return [];
     }
 
     /* ------------------------------------------------------------------ */
