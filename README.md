@@ -75,7 +75,7 @@ const ui = new ChatUI(agent, config, buildChatPanel(document.querySelector('#cha
 ui.addElement(cardElement);   // show a table or chart a tool made
 ```
 
-`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own. The user-provided key mode stores the key under geo-agent's `localStorage` names, so a key saved in one GLEN app works in the others on the same site.
+`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, and `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page. The user-provided key mode stores the key under geo-agent's `localStorage` names, so a key saved in one GLEN app works in the others on the same site.
 
 ## Apps without MCP
 
@@ -125,6 +125,17 @@ const { response } = await agent.processMessage('How many protected areas are in
 
 [`examples/node.js`](examples/node.js) is a runnable version. Without an LLM key it connects to the MCP server and lists the tools.
 
+Several MCP servers can register in one registry, and each tool call goes to the server that listed the tool. Pass each server's place in the app's configuration as `rank`: when two servers list a tool of the same name, the lower rank keeps it. `clearRemote(client)` drops one server's tools after it reconnects and leaves the others in place.
+
+MCP gives a client no way to ask a server for part of its tool list, so the registry filters instead. `include` registers only the named tools, and `exclude` registers all but those:
+
+```js
+registry.registerRemote(duckdb.getTools(), duckdb, null, { rank: 0, exclude: ['browse_stac_catalog'] });
+registry.registerRemote(sdm.getTools(), sdm, null, { rank: 1, include: ['fit_sdm'] });
+```
+
+An `include` name the server does not list is logged as a warning.
+
 Model settings (`temperature`, `max_tokens`, `prompt_cache`, `reasoning_toggle`, `llm_timeout_seconds`, `max_tool_calls`, and others) are read from the config object, per model first and then globally. They are documented in the geo-agent [configuration guide](https://github.com/boettiger-lab/geo-agent/blob/main/docs/guide/configuration.md).
 
 ## Changes from geo-agent
@@ -136,28 +147,11 @@ The code is the same as in geo-agent except for two options, so that it no longe
 
 Since v0.2.0 it also carries a later geo-agent fix: a model without an `api_key` is sent no `Authorization` header, so a deployment behind basic auth keeps working (SchmidtDSE/glen#420).
 
-## Linking from geo-agent
+Since v0.3.0 it also carries glen's support for several MCP servers in one registry (glen#338), and adds the `include` and `exclude` filters and the `footerLinks` hook that glen needs to move onto the harness.
 
-We propose that geo-agent vendor a pinned copy of `src/` into `app/vendor/glen-harness/` and keep `app/agent.js`, `app/tool-registry.js` and `app/mcp-client.js` as thin modules that pass geo-agent's name to the harness:
+## Use in GLEN
 
-```js
-// geo-agent/app/agent.js
-import { Agent as HarnessAgent } from './vendor/glen-harness/agent.js';
-
-const APP_VERSION = import.meta.url.match(/geo-agent@([^/]+)/)?.[1] || 'dev';
-
-export class Agent extends HarnessAgent {
-    constructor(config, toolRegistry) {
-        super(config, toolRegistry, { clientName: `geo-agent/${APP_VERSION}` });
-    }
-}
-```
-
-The chat interface can follow the same pattern: vendor `ui/` beside `src/`, keep `app/chat-ui.js` as a subclass that overrides `exportRow()` to return geo-agent's panel-actions row, and add the `chat-docked` class to the sidebar so `chat-docked.css` can replace the chat rules in `sidebar.css`.
-
-This follows the pattern geo-agent already uses for the MCP SDK (geo-agent#343). Every module still loads from the jsDelivr path the app is pinned to, no new host enters the page load, and geo-agent's tests resolve the files by relative path. A CI check that the vendored copy matches the pinned glen-harness tag would replace the current check on `mcp-sdk.js`. We tested this layout in a geo-agent worktree: all 975 geo-agent tests pass with the three modules replaced by thin modules over this harness.
-
-Importing directly from a jsDelivr URL also works in the browser, but Node and vitest cannot resolve `https:` imports, so geo-agent's tests would need an alias to a second copy installed from npm or git.
+glen core (`core/` in [SchmidtDSE/glen](https://github.com/SchmidtDSE/glen)) imports the harness from jsDelivr at a release tag and keeps no copy. glen's full app in `app/` still runs its own copies of the agent, registry, MCP client and chat, from which this code was taken. They are to be replaced as that app moves onto glen core and its plugins; the steps are tracked in [glen#441](https://github.com/SchmidtDSE/glen/issues/441).
 
 ## Design principles
 

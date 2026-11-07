@@ -96,3 +96,49 @@ describe('chatStylesheets', () => {
         expect(chatStylesheets({ docked: false })).toHaveLength(1);
     });
 });
+
+describe('ChatUI footer links', () => {
+    class HostUI extends ChatUI {
+        footerLinks(links) {
+            return [
+                { href: '#data', label: 'Data', className: 'data-link', title: 'The datasets this app uses' },
+                { href: 'https://example.org/help', label: 'Help', external: true },
+            ];
+        }
+    }
+
+    function mountHost(config) {
+        const mount = buildChatPanel(document.createElement('div'));
+        const agent = new Agent(config, new ToolRegistry());
+        return { mount, ui: new HostUI(agent, config, mount) };
+    }
+
+    it('puts the host links first, in order, then About and GitHub', () => {
+        const { ui } = mountHost({ ...CONFIG, links: { docs: 'https://example.org/docs', github: 'https://github.com/x/y' } });
+        const labels = [...ui.footerEl.querySelectorAll('a.footer-link')].map((a) => a.textContent || a.className);
+        expect(labels.slice(0, 3)).toEqual(['Data', 'Help', 'About']);
+        expect(ui.footerEl.querySelector('a.github-link')).not.toBe(null);
+    });
+
+    it('adds host links without a links config, opening only external ones in a new tab', () => {
+        const { ui } = mountHost(CONFIG);
+        const [data, help] = ui.footerEl.querySelectorAll('a.footer-link');
+        expect(data.getAttribute('href')).toBe('#data');
+        expect(data.classList.contains('data-link')).toBe(true);
+        expect(data.target).toBe('');
+        expect(help.target).toBe('_blank');
+        expect(help.rel).toBe('noopener noreferrer');
+    });
+
+    it('adds nothing by default', () => {
+        const { ui } = mountUI();
+        expect(ui.footerEl.querySelectorAll('a.footer-link')).toHaveLength(0);
+    });
+
+    it('leaves the footer to the app header when it absorbs the links', () => {
+        const mount = buildChatPanel(document.createElement('div'));
+        mount.linksAbsorbed = true;
+        const ui = new HostUI(new Agent(CONFIG, new ToolRegistry()), CONFIG, mount);
+        expect(ui.footerEl.querySelectorAll('a.footer-link')).toHaveLength(0);
+    });
+});
