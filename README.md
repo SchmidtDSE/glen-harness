@@ -151,7 +151,7 @@ Since v0.3.0 it also carries glen's support for several MCP servers in one regis
 
 ## Use in GLEN
 
-glen core (`core/` in [SchmidtDSE/glen](https://github.com/SchmidtDSE/glen)) imports the harness from jsDelivr at a release tag and keeps no copy. glen's full app in `app/` still runs its own copies of the agent, registry, MCP client and chat, from which this code was taken. They are to be replaced as that app moves onto glen core and its plugins; the steps are tracked in glen.
+glen core (`core/` in [SchmidtDSE/glen](https://github.com/SchmidtDSE/glen)) imports the harness from jsDelivr at a release tag and keeps no copy. glen's full app in `app/` still runs its own copies of the agent, registry, MCP client and chat, from which this code was taken. They are to be replaced as that app moves onto glen core and its plugins; the steps are tracked in [glen#441](https://github.com/SchmidtDSE/glen/issues/441).
 
 ## Design principles
 
