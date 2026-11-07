@@ -51,7 +51,7 @@ describe('MCPClient connect', () => {
     it('identifies itself as glen-harness unless given clientInfo', async () => {
         const { Client } = await import('../src/vendor/mcp-sdk.js');
         await new MCPClient('https://mcp.example/mcp').connect();
-        expect(Client.mock.calls.at(-1)[0]).toEqual({ name: 'glen-harness', version: '0.1.0' });
+        expect(Client.mock.calls.at(-1)[0]).toEqual({ name: 'glen-harness', version: '0.3.0' });
         await new MCPClient('https://mcp.example/mcp', {}, { clientInfo: { name: 'geo-chat-client', version: '2.0.0' } }).connect();
         expect(Client.mock.calls.at(-1)[0]).toEqual({ name: 'geo-chat-client', version: '2.0.0' });
     });
