@@ -35,7 +35,7 @@ export class MCPClient {
     constructor(serverUrl, headers = {}, options = {}) {
         this.serverUrl = serverUrl;
         this.headers = headers;
-        this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.3.0' };
+        this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.4.0' };
         this.transportFactory = options.transport ?? null;
         this.client = null;
         this.connected = false;
