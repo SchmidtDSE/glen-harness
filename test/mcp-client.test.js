@@ -343,3 +343,27 @@ describe('MCPClient disconnect and listTools refresh', () => {
         expect(c.getTools().map(t => t.name)).toEqual(['fresh1', 'fresh2']);
     });
 });
+
+describe('MCPClient setHeaders (glen#442)', () => {
+    it('drops the connection so the next connect uses the new headers', async () => {
+        const { StreamableHTTPClientTransport } = await import('../src/vendor/mcp-sdk.js');
+        const c = new MCPClient('https://mcp.example/mcp', {});
+        await c.connect();
+        const first = lastClient();
+        c.reconnectAttempts = 3;
+        await c.setHeaders({ Authorization: 'Bearer new' });
+        expect(first.close).toHaveBeenCalled();
+        expect(c.isConnected).toBe(false);
+        expect(c.reconnectAttempts).toBe(0);
+        await c.connect();
+        const lastTransportArgs = StreamableHTTPClientTransport.mock.calls.at(-1);
+        expect(lastTransportArgs[1].requestInit.headers).toEqual({ Authorization: 'Bearer new' });
+        expect(c.isConnected).toBe(true);
+    });
+
+    it('works before any connection', async () => {
+        const c = new MCPClient('https://mcp.example/mcp');
+        await c.setHeaders({ Authorization: 'Bearer x' });
+        expect(c.headers).toEqual({ Authorization: 'Bearer x' });
+    });
+});

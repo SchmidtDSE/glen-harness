@@ -10,6 +10,11 @@
  */
 
 import { sqlArg } from '../src/tool-registry.js';
+import {
+    DEFAULT_USER_ENDPOINT, STORAGE_KEY_API, STORAGE_KEY_ENDPOINT, STORAGE_KEY_MODEL,
+    buildUserModels, fetchModelIds, loadUserSettings,
+} from '../src/llm-models.js';
+import { STORAGE_KEY_MCP_TOKEN } from '../src/mcp-token.js';
 import { githubIcon, leafIcon, micIcon, stopIcon } from './icons.js';
 
 import { renderMarkdown, scrubCredentials, REDACTED_KEYS } from './markdown.js';
@@ -412,19 +417,50 @@ export class ChatUI {
     }
 
     /* ------------------------------------------------------------------ */
-    /*  Settings panel (user-provided API key mode)                         */
+    /*  Settings panel: the visitor's LLM key (user-provided mode) and     */
+    /*  MCP token (glen#442)                                                    */
     /* ------------------------------------------------------------------ */
 
     initSettingsUI() {
         const footer = this.footerRightEl;
-        if (!footer) return;
+        if (!footer || footer.querySelector('#settings-btn')) return;
 
         const btn = document.createElement('button');
         btn.id = 'settings-btn';
         btn.title = 'API settings';
-        btn.textContent = '\u2699';
+        btn.textContent = '⚙';
         btn.addEventListener('click', () => this.toggleSettingsPanel());
         footer.prepend(btn);
+    }
+
+    /**
+     * Offer an MCP token field in the settings panel (SchmidtDSE/glen#442).
+     * The host calls this only when a visitor's token would be sent: a
+     * cross-origin MCP server the deployment gave no token
+     * (see userTokenApplies in src/mcp-token.js).
+     *
+     * @param {Object} opts
+     * @param {boolean} opts.authFailed - the server refused us at boot
+     * @param {(token: string) => Promise<void>} opts.apply - use a saved or
+     *   cleared token (reconnect, or reload after a refused boot)
+     */
+    enableMcpToken({ authFailed = false, apply } = {}) {
+        this._mcpToken = { apply };
+        // The ⚙ button appears when there is something to set: always in
+        // user-provided mode, otherwise once the server has refused us or a
+        // token is already saved (so it can be changed or cleared).
+        if (this.config._userProvidedMode || authFailed || localStorage.getItem(STORAGE_KEY_MCP_TOKEN)) {
+            this.initSettingsUI();
+        }
+        if (authFailed) {
+            this.addMessage('system',
+                'The data server needs an access token, so data queries will fail. '
+                + 'Ask the app\'s operator for a token and enter it under ⚙ settings.');
+            this.showSettingsPanel();
+        } else if (document.getElementById('api-settings-panel')) {
+            // Already open (user-provided mode's first visit): add the field.
+            this.showSettingsPanel();
+        }
     }
 
     toggleSettingsPanel() {
@@ -441,87 +477,146 @@ export class ChatUI {
         document.getElementById('api-settings-panel')?.remove();
 
         const llmConfig = this.config.llm || {};
-        const savedKey = localStorage.getItem('geo-agent-api-key') || '';
-        const savedEndpoint = localStorage.getItem('geo-agent-endpoint')
-            || llmConfig.default_endpoint || 'https://openrouter.ai/api/v1';
+        const showLLM = !!this.config._userProvidedMode;
+        const showMcp = !!this._mcpToken;
+        const saved = loadUserSettings();
+        const savedKey = saved.apiKey;
+        const savedEndpoint = saved.endpoint
+            || llmConfig.default_endpoint || DEFAULT_USER_ENDPOINT;
+        const savedMcpToken = localStorage.getItem(STORAGE_KEY_MCP_TOKEN) || '';
+        const MASK = '•'.repeat(8);
 
         const panel = document.createElement('div');
         panel.id = 'api-settings-panel';
         panel.innerHTML = `
             <div class="settings-title">API Settings</div>
+            ${showLLM ? `
             <label class="settings-label" for="settings-endpoint">Endpoint</label>
-            <input id="settings-endpoint" type="url" value="${this.escapeHtml(savedEndpoint)}" 
+            <input id="settings-endpoint" type="url"
                    placeholder="https://openrouter.ai/api/v1" spellcheck="false">
             <label class="settings-label" for="settings-api-key">API Key</label>
-            <input id="settings-api-key" type="password" value="${savedKey ? '••••••••' : ''}" 
-                   placeholder="sk-..." spellcheck="false"
-                   onfocus="if(this.value.startsWith('••'))this.value=''">
+            <input id="settings-api-key" type="password" placeholder="sk-..." spellcheck="false">
+            <label class="settings-label" for="settings-model">Model (optional)</label>
+            <input id="settings-model" type="text" list="settings-model-options"
+                   placeholder="any model id your endpoint serves" spellcheck="false" autocomplete="off">
+            <datalist id="settings-model-options"></datalist>` : ''}
+            ${showMcp ? `
+            <label class="settings-label" for="settings-mcp-token">Data server token</label>
+            <input id="settings-mcp-token" type="password" placeholder="from the app's operator"
+                   spellcheck="false" autocomplete="off">` : ''}
             <div class="settings-actions">
                 <button id="settings-save" class="settings-save-btn">Save</button>
                 <button id="settings-cancel" class="settings-cancel-btn">Cancel</button>
             </div>
             <div class="settings-hint">
-                Keys are stored in your browser only and never sent to this server.
+                ${showLLM ? 'Keys are stored in your browser only and never sent to this server. Leave the model empty to choose from this app\'s list.' : ''}
+                ${showMcp ? 'The data server token is stored in your browser and sent only to the data server. Clear it to remove it.' : ''}
             </div>
         `;
+
+        // Saved values go in as properties, not markup: escapeHtml leaves
+        // quotes alone, so it cannot guard an attribute. Saved secrets show
+        // as a mask that clears on focus.
+        const field = (id) => panel.querySelector(id);
+        const masked = (input, has) => {
+            if (!input || !has) return;
+            input.value = MASK;
+            input.addEventListener('focus', () => { if (input.value === MASK) input.value = ''; }, { once: true });
+        };
+        if (showLLM) {
+            field('#settings-endpoint').value = savedEndpoint;
+            field('#settings-model').value = saved.model;
+            masked(field('#settings-api-key'), !!savedKey);
+        }
+        masked(field('#settings-mcp-token'), !!savedMcpToken);
 
         // Insert before messages area
         this.messagesEl.parentNode.insertBefore(panel, this.messagesEl);
 
-        // Wire buttons
-        panel.querySelector('#settings-save').addEventListener('click', () => {
-            const endpoint = panel.querySelector('#settings-endpoint').value.trim();
-            const apiKey = panel.querySelector('#settings-api-key').value.trim();
+        // Suggest the endpoint's own models (OpenRouter's catalog is public).
+        // Typing any other id still works; a failed fetch leaves no suggestions.
+        if (showLLM) {
+            const endpointInput = field('#settings-endpoint');
+            const suggest = () => this._suggestModels(panel, endpointInput.value.trim(), savedKey);
+            endpointInput.addEventListener('change', suggest);
+            suggest();
+        }
 
-            if (!apiKey || apiKey.startsWith('\u2022')) {
-                // No change to key if user didn't type a new one
-                if (!savedKey) {
-                    panel.querySelector('#settings-api-key').style.borderColor = '#dc3545';
-                    return;
+        field('#settings-save').addEventListener('click', () => {
+            if (showLLM) {
+                const endpoint = field('#settings-endpoint').value.trim();
+                const apiKey = field('#settings-api-key').value.trim();
+                const model = field('#settings-model').value.trim();
+                if (!apiKey || apiKey === MASK) {
+                    // No change to key if user didn't type a new one
+                    if (!savedKey) {
+                        field('#settings-api-key').style.borderColor = '#dc3545';
+                        return;
+                    }
+                } else {
+                    localStorage.setItem(STORAGE_KEY_API, apiKey);
                 }
-            } else {
-                localStorage.setItem('geo-agent-api-key', apiKey);
+                if (endpoint) localStorage.setItem(STORAGE_KEY_ENDPOINT, endpoint);
+                if (model) localStorage.setItem(STORAGE_KEY_MODEL, model);
+                else localStorage.removeItem(STORAGE_KEY_MODEL);
+                this.applyUserLLMConfig();
             }
-            if (endpoint) {
-                localStorage.setItem('geo-agent-endpoint', endpoint);
+            if (showMcp) {
+                const token = field('#settings-mcp-token').value.trim();
+                if (token !== MASK && token !== savedMcpToken) {
+                    if (token) localStorage.setItem(STORAGE_KEY_MCP_TOKEN, token);
+                    else localStorage.removeItem(STORAGE_KEY_MCP_TOKEN);
+                    this._applyMcpToken(token);
+                }
             }
-
-            // Rebuild LLM models from new settings
-            this.applyUserLLMConfig();
             panel.remove();
         });
 
-        panel.querySelector('#settings-cancel').addEventListener('click', () => {
+        field('#settings-cancel').addEventListener('click', () => {
             panel.remove();
         });
+    }
+
+    /** Hand a saved or cleared MCP token to the host and report the outcome. */
+    async _applyMcpToken(token) {
+        try {
+            await this._mcpToken?.apply(token);
+            this.addMessage('system', token ? 'Connected to the data server with your token.' : 'Data server token removed.');
+        } catch (err) {
+            this.addMessage('error', `The data server did not accept the token: ${err?.message || err}`);
+        }
+    }
+
+    /**
+     * Fill the settings panel's model suggestions from `<endpoint>/models`.
+     * The key is sent only to the endpoint the user typed, where it goes anyway.
+     */
+    async _suggestModels(panel, endpoint, apiKey) {
+        const list = panel.querySelector('#settings-model-options');
+        if (!list) return;
+        const token = (this._suggestToken = (this._suggestToken || 0) + 1);
+        const ids = endpoint ? await fetchModelIds(endpoint, { apiKey }) : [];
+        if (token !== this._suggestToken) return;   // a newer endpoint was typed
+        list.replaceChildren(...ids.map(id => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            return opt;
+        }));
     }
 
     /**
      * Rebuild llm_models from localStorage and update the agent.
      */
     applyUserLLMConfig() {
-        const llmConfig = this.config.llm || {};
-        const apiKey = localStorage.getItem('geo-agent-api-key');
-        const endpoint = localStorage.getItem('geo-agent-endpoint')
-            || llmConfig.default_endpoint || 'https://openrouter.ai/api/v1';
+        const built = buildUserModels(this.config.llm || {}, loadUserSettings());
+        if (!built) return;
 
-        if (!apiKey) return;
-
-        const models = (llmConfig.models || []).map(m => ({
-            ...m,
-            endpoint,
-            api_key: apiKey,
-        }));
-
-        if (models.length === 0) {
-            models.push({ value: 'auto', label: 'Auto', endpoint, api_key: apiKey });
-        }
-
-        this.config.llm_models = models;
-        this.config.llm_model = models[0]?.value;
+        this.config.llm_models = built.llm_models;
+        this.config.llm_model = built.llm_model;
         this.agent.config = this.config;
-        this.agent.selectedModel = this.config.llm_model;
+        this.agent.setModel(this.config.llm_model);
         this.populateModelSelector();
+        this.syncReasoningToggle();
     }
 
     /* ------------------------------------------------------------------ */
@@ -670,7 +765,7 @@ export class ChatUI {
         }
 
         // In user-provided mode, check for API key before sending
-        if (this.config._userProvidedMode && !localStorage.getItem('geo-agent-api-key')) {
+        if (this.config._userProvidedMode && !localStorage.getItem(STORAGE_KEY_API)) {
             this.showSettingsPanel();
             return;
         }

@@ -13,3 +13,13 @@ export {
     REMOTE_SQL_ARGS,
     LOCAL_SQL_ARGS,
 } from './tool-registry.js';
+export {
+    applyProxyModelList,
+    buildUserModels,
+    loadUserSettings,
+    fetchModelIds,
+    modelsFromTierList,
+    STORAGE_KEY_API,
+    STORAGE_KEY_ENDPOINT,
+    STORAGE_KEY_MODEL,
+} from './llm-models.js';

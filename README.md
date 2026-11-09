@@ -12,10 +12,12 @@ This is a draft. The code was extracted from [boettiger-lab/geo-agent](https://g
 | `src/tool-registry.js` | `ToolRegistry`: one dispatch for local tools (functions in the same process, such as map controls) and remote tools (on an MCP server). Converts tool schemas to the OpenAI function-calling format and memoizes idempotent metadata reads. |
 | `src/mcp-client.js` | `MCPClient`: connection to an MCP server, with lazy reconnect. Streamable HTTP by default; pass `{ transport: () => … }` for any other MCP transport. |
 | `src/post-message-transport.js` | `PostMessageTransport`: MCP over `postMessage`, for a server running in a Web Worker in the same page. |
+| `src/llm-models.js` | Which models the picker offers: the open-llm-proxy's tier list (`applyProxyModelList`), and the models of a user who brings their own key (`buildUserModels`). See [Model list](#model-list). |
+| `src/mcp-token.js` | A visitor's own token for an app's MCP server: when it may be sent (`userTokenApplies`) and whether a connection error is the server refusing it (`isMcpAuthError`). See [MCP token for visitors](#mcp-token-for-visitors). |
 | `src/core.js` | The `./core` entry: `Agent` and `ToolRegistry` without the MCP client. Nothing it imports loads the MCP SDK. |
 | `src/vendor/mcp-sdk.js` | The MCP SDK, pre-bundled so that no import map or third-party module host is needed. See [`src/vendor/README.md`](src/vendor/README.md). |
 
-The harness in `src/` has no DOM code and no dependencies beyond the vendored MCP SDK, which only `mcp-client.js` imports. A host application connects its UI through callbacks on the `Agent` (`onToolProposal`, `onToolResults`, `onResponse`, `onCheckpoint`, and others).
+The harness in `src/` has no DOM code and no dependencies beyond the vendored MCP SDK, which only `mcp-client.js` imports. `src/llm-models.js` and `src/mcp-token.js` use `fetch` and `localStorage` when they are there and work without them. A host application connects its UI through callbacks on the `Agent` (`onToolProposal`, `onToolResults`, `onResponse`, `onCheckpoint`, and others).
 
 ## Agent loop
 
@@ -75,7 +77,41 @@ const ui = new ChatUI(agent, config, buildChatPanel(document.querySelector('#cha
 ui.addElement(cardElement);   // show a table or chart a tool made
 ```
 
-`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, and `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page. The user-provided key mode stores the key under geo-agent's `localStorage` names, so a key saved in one GLEN app works in the others on the same site.
+`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, and `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
+
+## Model list
+
+When every model in `llm_models` uses one endpoint, `applyProxyModelList(config)` asks that endpoint for `GET <endpoint>/models`. If the answer is open-llm-proxy's tier list (it has a `tier`), the function replaces `llm_models` with the models the app's key may use and sets `llm_model` to the proxy's default for that tier. The app's own entries then supply only per-model settings (label, `reasoning_toggle`, sampling), matched by id, and an entry the proxy does not list is left out, since the proxy would refuse it with a 403. If the request fails or the endpoint is not the proxy, the config is left as it was. A host calls it before creating the `Agent`:
+
+```js
+await applyProxyModelList(config);   // resolves to the tier name, or null
+const agent = new Agent(config, registry);
+```
+
+In the user-provided key mode (`llm.user_provided`), `buildUserModels(config.llm, loadUserSettings())` builds the list from the key, endpoint and optional model id the user saved in the chat's settings panel. A model id the user names goes first and starts selected; the panel suggests the ids the endpoint's `/models` lists. These are SchmidtDSE/glen#444 and glen#443.
+
+## MCP token for visitors
+
+A static deployment has nowhere to keep a secret, so when its MCP server wants a token, the visitor can enter one in the chat's settings panel. It is saved in their browser and sent as a bearer token to that server only (SchmidtDSE/glen#442). It is offered only where `userTokenApplies(server)` holds: the server is on another origin from the page, and the app gives it no `Authorization` header of its own. A same-origin URL is the deployment's own relay, and a header set by the page there would replace the browser's saved basic-auth credentials (glen#420).
+
+```js
+const server = { url: 'https://duckdb-mcp.example.org/mcp', headers: {} };
+const offer = userTokenApplies(server);
+const mcp = new MCPClient(server.url, offer ? withUserToken(server.headers, loadMcpToken()) : server.headers);
+let authFailed = false;
+try { await mcp.connect(); } catch (err) { authFailed = isMcpAuthError(err); }
+
+// after the ChatUI exists:
+if (offer) ui.enableMcpToken({
+    authFailed,
+    apply: async (token) => {
+        await mcp.setHeaders(withUserToken(server.headers, token));
+        await mcp.reconnect();
+    },
+});
+```
+
+With `authFailed` the chat says the data server needs a token and opens the panel. `apply` runs when the visitor saves or clears a token; a host whose tools were never registered because the server refused it at startup can reload the page instead. Whether the server accepts the header from a browser depends on its CORS settings allowing `Authorization` from the app's origin.
 
 ## Apps without MCP
 
@@ -87,7 +123,7 @@ const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
 
-These load seven files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `ui/chat-ui.js`, `ui/markdown.js`, `ui/export-config.js` and `ui/icons.js`. They load neither the MCP SDK nor the session export. The export button is on by default; such an app sets `"export": false` in its config to drop it, and the export module is then never requested. Voice input still loads on demand from `ui/voice-input.js` and `ui/transcriber.js` when the config names a `transcription_model`. The same app can add MCP tools later by importing `src/mcp-client.js` and passing its tools to `registerRemote`.
+These load nine files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `src/llm-models.js`, `src/mcp-token.js`, `ui/chat-ui.js`, `ui/markdown.js`, `ui/export-config.js` and `ui/icons.js`. They load neither the MCP SDK nor the session export. The export button is on by default; such an app sets `"export": false` in its config to drop it, and the export module is then never requested. Voice input still loads on demand from `ui/voice-input.js` and `ui/transcriber.js` when the config names a `transcription_model`. The same app can add MCP tools later by importing `src/mcp-client.js` and passing its tools to `registerRemote`.
 
 ## Use
 
@@ -186,3 +222,5 @@ CI runs the tests and checks that `src/vendor/mcp-sdk.js` matches a fresh build.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) and [DISCLOSURE.md](DISCLOSURE.md).
+
+Since v0.4.0 it also carries glen's model list from the proxy and model id for user-provided keys (glen#443, glen#444), and the MCP token for visitors (glen#442), with `MCPClient#setHeaders` to change a token without a new client.

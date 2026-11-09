@@ -34,10 +34,16 @@ describe('what each entry loads up front', () => {
         expect(graph).toEqual(expect.arrayContaining(['src/agent.js', 'src/tool-registry.js']));
     });
 
+    it('the chat reaches the token helpers but not the MCP client or SDK', () => {
+        const graph = staticGraph('ui/chat-ui.js');
+        expect(graph).toContain('src/mcp-token.js');
+        expect(graph.some((f) => /mcp-client|vendor/.test(f))).toBe(false);
+    });
+
     it('the core entry and the chat together are the files a map-only app needs', () => {
         const files = new Set([...staticGraph('src/core.js'), ...staticGraph('ui/chat-ui.js')]);
         expect([...files].sort()).toEqual([
-            'src/agent.js', 'src/core.js', 'src/tool-registry.js',
+            'src/agent.js', 'src/core.js', 'src/llm-models.js', 'src/mcp-token.js', 'src/tool-registry.js',
             'ui/chat-ui.js', 'ui/export-config.js', 'ui/icons.js', 'ui/markdown.js',
         ]);
     });

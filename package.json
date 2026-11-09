@@ -16,6 +16,8 @@
     "./tool-registry.js": "./src/tool-registry.js",
     "./mcp-client.js": "./src/mcp-client.js",
     "./post-message-transport.js": "./src/post-message-transport.js",
+    "./llm-models.js": "./src/llm-models.js",
+    "./mcp-token.js": "./src/mcp-token.js",
     "./ui": "./ui/index.js",
     "./ui/chat-ui.js": "./ui/chat-ui.js",
     "./ui/markdown.js": "./ui/markdown.js",
