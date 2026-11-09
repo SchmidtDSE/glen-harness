@@ -18,6 +18,9 @@
 // and a static import of an unreachable host white-screens the whole app (#343).
 import { Client, StreamableHTTPClientTransport } from './vendor/mcp-sdk.js';
 
+// A visitor's MCP token (glen#442); re-exported for hosts that connect here.
+export { STORAGE_KEY_MCP_TOKEN, userTokenApplies, withUserToken, isMcpAuthError, loadMcpToken } from './mcp-token.js';
+
 export class MCPClient {
     /**
      * @param {string} serverUrl - Streamable HTTP endpoint of the MCP server.
@@ -46,6 +49,23 @@ export class MCPClient {
         this.lastReconnectTime = 0;
         this._connectPromise = null;
         this._onReconnect = null;
+    }
+
+    /**
+     * Replace the request headers (a new auth token, SchmidtDSE/glen#442).
+     * Drops the current connection and resets the retry budget, so the next
+     * connect() or reconnect() uses the new headers straight away.
+     */
+    async setHeaders(headers = {}) {
+        this.headers = headers;
+        this.connected = false;
+        this.reconnectAttempts = 0;
+        this.lastReconnectTime = 0;
+        const old = this.client;
+        this.client = null;
+        if (old) {
+            try { await old.close(); } catch { /* ignore */ }
+        }
     }
 
     /**
