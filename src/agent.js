@@ -74,6 +74,8 @@ export class Agent {
         this.onResponse = () => { };
         this.onError = () => { };
         this.onRetry = () => { };
+        // Waits before retrying a 5xx or network error; one retry per entry (#437).
+        this.retryDelaysMs = [15000, 60000];
         this.onCheckpoint = () => { };
     }
 
@@ -690,14 +692,16 @@ export class Agent {
     }
 
     /**
-     * Call the LLM API, with one auto-retry on transient errors (gateway 5xx,
-     * network blips, client-side timeout).
+     * Call the LLM API, retrying transient errors (gateway 5xx, network
+     * blips, client-side timeout).
      *
-     * Retry timeout depends on the failure: a *timeout* means the model is
-     * slow, not dead, so the retry gets the full budget again (a short retry
-     * window a slow model is guaranteed to blow through just wastes a round).
-     * A fast transient failure (5xx / network blip) keeps a tight 90s retry so
-     * a genuinely-dead endpoint fails fast instead of burning the full budget.
+     * Every retry gets the full `llm_timeout_seconds` budget. A slow thinking
+     * model cannot answer a long-context request in a short window, so a
+     * tight retry turned one 502 into a lost task (#437). A client timeout is
+     * retried once. A 5xx or network error is retried up to
+     * `retryDelaysMs.length` times, after waiting each delay in turn, so a
+     * short gateway outage clears before the next attempt. A dead endpoint
+     * still fails, only later. Stop ends a wait at once.
      */
     async callLLM(endpoint, modelConfig, messages, tools) {
         const payload = {
@@ -711,18 +715,46 @@ export class Agent {
         };
 
         const timeoutMs = this._llmTimeoutMs(modelConfig);
-        try {
-            return await this._attemptLLMCall(endpoint, modelConfig, payload, timeoutMs);
-        } catch (error) {
-            if (!this._isTransientLLMError(error)) throw error;
-            if (this.abortController?.signal.aborted) throw error; // user-Stop, don't retry
+        for (let retries = 0; ; retries++) {
+            try {
+                return await this._attemptLLMCall(endpoint, modelConfig, payload, timeoutMs);
+            } catch (error) {
+                if (!this._isTransientLLMError(error)) throw error;
+                if (this.abortController?.signal.aborted) throw error; // user-Stop, don't retry
+                const delays = Array.isArray(this.retryDelaysMs) ? this.retryDelaysMs : [];
+                const allowed = error.timedOut ? 1 : delays.length;
+                if (retries >= allowed) throw error;
 
-            const retryMs = error.timedOut ? timeoutMs : 90000;
-            console.warn(`[Agent] Transient LLM error, retrying with ${Math.round(retryMs / 1000)}s timeout:`, error.message);
-            this.onRetry?.(error);
-
-            return await this._attemptLLMCall(endpoint, modelConfig, payload, retryMs);
+                const waitMs = error.timedOut ? 0 : Math.max(0, delays[retries] || 0);
+                console.warn(`[Agent] Transient LLM error, retry ${retries + 1} of ${allowed}`
+                    + `${waitMs ? ` in ${Math.round(waitMs / 1000)}s` : ''}:`, error.message);
+                this.onRetry?.(error, { attempt: retries + 1, of: allowed, waitMs });
+                await this._waitBeforeRetry(waitMs);
+            }
         }
+    }
+
+    /**
+     * Wait before an LLM retry. Resolves early with an AbortError when the
+     * user presses Stop, so a wait never holds up a stopped turn.
+     */
+    _waitBeforeRetry(ms) {
+        if (!ms) return Promise.resolve();
+        const signal = this.abortController?.signal;
+        return new Promise((resolve, reject) => {
+            const onAbort = () => {
+                clearTimeout(timer);
+                reject(new DOMException('Aborted', 'AbortError'));
+            };
+            const timer = setTimeout(() => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve();
+            }, ms);
+            if (signal) {
+                if (signal.aborted) onAbort();
+                else signal.addEventListener('abort', onAbort, { once: true });
+            }
+        });
     }
 
     /**

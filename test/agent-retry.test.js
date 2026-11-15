@@ -145,10 +145,12 @@ describe('Agent.callLLM retry orchestration', () => {
     beforeEach(() => {
         agent = makeAgent();
         agent.abortController = new AbortController();
+        agent.retryDelaysMs = [0, 0]; // two 5xx retries, no real waiting
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.useRealTimers();
     });
 
     it('returns first-attempt success without retry', async () => {
@@ -214,43 +216,98 @@ describe('Agent.callLLM retry orchestration', () => {
         expect(onRetry).not.toHaveBeenCalled();
     });
 
-    it('throws second-attempt error when retry also fails', async () => {
+    it('retries a 5xx twice, then throws the last error', async () => {
         global.fetch = vi.fn()
             .mockResolvedValueOnce(errResponse(502, 'gateway one'))
-            .mockResolvedValueOnce(errResponse(503, 'gateway two'));
+            .mockResolvedValueOnce(errResponse(503, 'gateway two'))
+            .mockResolvedValueOnce(errResponse(504, 'gateway three'));
         const onRetry = vi.fn();
         agent.onRetry = onRetry;
 
         await expect(agent.callLLM('https://x/v1', { api_key: 'k' }, [], []))
-            .rejects.toMatchObject({ status: 503 });
-        expect(global.fetch).toHaveBeenCalledTimes(2);
-        expect(onRetry).toHaveBeenCalledOnce();
+            .rejects.toMatchObject({ status: 504 });
+        expect(global.fetch).toHaveBeenCalledTimes(3);
+        expect(onRetry).toHaveBeenCalledTimes(2);
+        expect(onRetry.mock.calls[1][1]).toMatchObject({ attempt: 2, of: 2 });
     });
 
-    it('retries a timeout with the full budget, not the tight 90s window', async () => {
+    it('recovers when the second retry succeeds', async () => {
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce(errResponse(502))
+            .mockRejectedValueOnce(new TypeError('fetch failed'))
+            .mockResolvedValueOnce(okResponse('third ok'));
+        const msg = await agent.callLLM('https://x/v1', { api_key: 'k' }, [], []);
+        expect(msg.content).toBe('third ok');
+    });
+
+    it('retries a timeout once with the full budget', async () => {
         // Spy the single-attempt call so we can read the timeoutMs it was
         // handed on each attempt without dealing with real timers.
+        const timeout = () => Object.assign(new Error('timed out'), { timedOut: true });
         const spy = vi.spyOn(agent, '_attemptLLMCall')
-            .mockRejectedValueOnce(Object.assign(new Error('timed out'), { timedOut: true }))
-            .mockResolvedValueOnce({ role: 'assistant', content: 'ok' });
+            .mockRejectedValueOnce(timeout())
+            .mockRejectedValueOnce(timeout());
         agent.config.llm_timeout_seconds = 480; // 8 min per-turn budget
 
-        const msg = await agent.callLLM('https://x/v1', { api_key: 'k' }, [], []);
-        expect(msg.content).toBe('ok');
+        await expect(agent.callLLM('https://x/v1', { api_key: 'k' }, [], [])).rejects.toMatchObject({ timedOut: true });
         // Both attempts get the full 480s — a timeout means slow, not dead.
+        expect(spy).toHaveBeenCalledTimes(2);
         expect(spy.mock.calls[0][3]).toBe(480000);
         expect(spy.mock.calls[1][3]).toBe(480000);
     });
 
-    it('retries a fast transient failure (5xx) with the tight 90s window', async () => {
+    it('gives a retry after a 5xx the full budget too, not 90 s (#437)', async () => {
         const spy = vi.spyOn(agent, '_attemptLLMCall')
-            .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 503 }))
+            .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 502 }))
             .mockResolvedValueOnce({ role: 'assistant', content: 'ok' });
-        agent.config.llm_timeout_seconds = 480;
+        agent.config.llm_timeout_seconds = 1200;
 
         await agent.callLLM('https://x/v1', { api_key: 'k' }, [], []);
-        expect(spy.mock.calls[0][3]).toBe(480000); // first attempt: full budget
-        expect(spy.mock.calls[1][3]).toBe(90000);  // retry: tight window
+        expect(spy.mock.calls[0][3]).toBe(1200000);
+        expect(spy.mock.calls[1][3]).toBe(1200000);
+    });
+
+    it('waits each delay before a 5xx retry', async () => {
+        vi.useFakeTimers();
+        agent.retryDelaysMs = [15000, 60000];
+        const spy = vi.spyOn(agent, '_attemptLLMCall')
+            .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 502 }))
+            .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 502 }))
+            .mockResolvedValueOnce({ role: 'assistant', content: 'ok' });
+        const onRetry = vi.fn();
+        agent.onRetry = onRetry;
+
+        const p = agent.callLLM('https://x/v1', { api_key: 'k' }, [], []);
+        await vi.advanceTimersByTimeAsync(14999);
+        expect(spy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(spy).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(59999);
+        expect(spy).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await p).content).toBe('ok');
+        expect(onRetry.mock.calls.map(c => c[1].waitMs)).toEqual([15000, 60000]);
+    });
+
+    it('stops waiting when the user presses Stop', async () => {
+        vi.useFakeTimers();
+        agent.retryDelaysMs = [60000];
+        const spy = vi.spyOn(agent, '_attemptLLMCall')
+            .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 503 }));
+
+        const p = agent.callLLM('https://x/v1', { api_key: 'k' }, [], []);
+        const caught = expect(p).rejects.toMatchObject({ name: 'AbortError' });
+        await vi.advanceTimersByTimeAsync(1000);
+        agent.abortController.abort();
+        await caught;
+        expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry a 5xx when no delays are configured', async () => {
+        agent.retryDelaysMs = [];
+        global.fetch = vi.fn(async () => errResponse(502));
+        await expect(agent.callLLM('https://x/v1', { api_key: 'k' }, [], [])).rejects.toMatchObject({ status: 502 });
+        expect(global.fetch).toHaveBeenCalledOnce();
     });
 });
 

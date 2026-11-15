@@ -182,9 +182,11 @@ export class ChatUI {
         this.agent.onToolExecuting = (calls) => this.showToolExecuting(calls);
         this.agent.onToolResults = (results, iter) => this.showToolResults(results, iter);
         this.agent.onError = (err) => this.addMessage('error', err);
-        this.agent.onRetry = (err) => {
+        this.agent.onRetry = (err, { attempt, of, waitMs } = {}) => {
             const reason = err?.timedOut ? 'timeout' : (err?.status ? `HTTP ${err.status}` : 'network error');
-            this.addMessage('system', `Transient ${reason} — retrying with shorter timeout...`);
+            const when = waitMs ? ` in ${Math.round(waitMs / 1000)} s` : '';
+            const count = of > 1 ? ` (${attempt} of ${of})` : '';
+            this.addMessage('system', `Transient ${reason}. Retrying${when}${count}…`);
         };
 
         // Render welcome message if configured
