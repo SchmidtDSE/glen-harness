@@ -113,6 +113,26 @@ describe('modelsFromTierList (#444)', () => {
         expect(modelsFromTierList(null, [], { endpoint: '/e' })).toBeNull();
     });
 
+    it('takes model settings from the proxy list, with the app\'s own settings winning (#461)', () => {
+        const list = tierList({ data: [
+            { id: 'deepseek-v4-flash', default: true, settings: { label: 'NRP DeepSeek V4 Flash', temperature: 0.6, max_tokens: 4096 } },
+            { id: 'kimi', settings: { label: 'Proxy Kimi', temperature: 0.9, prompt_cache: true } },
+            { id: 'glm-5', settings: ['not', 'an', 'object'] },
+            { id: 'odd', settings: null },
+        ] });
+        const { models } = modelsFromTierList(list, config, { endpoint: '/api/llm' });
+        expect(models[0]).toEqual({ value: 'deepseek-v4-flash', label: 'NRP DeepSeek V4 Flash', temperature: 0.6, max_tokens: 4096, endpoint: '/api/llm' });
+        expect(models[1]).toMatchObject({ value: 'kimi', label: 'Kimi K2', temperature: 0.3, prompt_cache: true, reasoning_toggle: true });
+        expect(models[2]).toEqual({ value: 'glm-5', label: 'glm-5', endpoint: '/api/llm' });
+        expect(models[3]).toEqual({ value: 'odd', label: 'odd', endpoint: '/api/llm' });
+    });
+
+    it('never takes an id, endpoint or key from the proxy settings', () => {
+        const list = tierList({ data: [{ id: 'a', settings: { value: 'b', endpoint: 'https://evil', api_key: 'x' } }] });
+        const { models } = modelsFromTierList(list, [], { endpoint: '/e' });
+        expect(models[0]).toEqual({ value: 'a', label: 'a', endpoint: '/e' });
+    });
+
     it('skips duplicate ids', () => {
         const { models } = modelsFromTierList(tierList({ data: [{ id: 'a' }, { id: 'a' }] }), [], { endpoint: '/e' });
         expect(models).toHaveLength(1);

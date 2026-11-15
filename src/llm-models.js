@@ -76,7 +76,8 @@ export function sharedEndpoint(models) {
  * @param {Object} list  - `{tier, default_model, data: [{id, ...}]}` from the proxy
  * @param {Array} configModels - the app's `llm_models`, used for per-model
  *   settings (label, reasoning_toggle, sampling, …) matched by id; entries the
- *   proxy does not list are dropped.
+ *   proxy does not list are dropped. A list entry's own `settings` object
+ *   (open-llm-proxy#189, same names) fills in whatever the app leaves unset.
  * @param {Object} opts
  * @param {string} opts.endpoint - the endpoint the list came from
  * @param {string} [opts.apiKey]  - the key used to fetch it, if any
@@ -94,7 +95,12 @@ export function modelsFromTierList(list, configModels, { endpoint, apiKey } = {}
         const id = entry?.id;
         if (typeof id !== 'string' || !id || seen.has(id)) continue;
         seen.add(id);
-        const settings = byId.get(id) || {};
+        // The proxy sets each model's client settings centrally
+        // (open-llm-proxy#189); the app's own llm_models entry wins over them.
+        const proxySettings = entry.settings && typeof entry.settings === 'object' && !Array.isArray(entry.settings)
+            ? entry.settings : {};
+        const appSettings = byId.get(id) || {};
+        const settings = { ...proxySettings, ...appSettings };
         const model = { ...settings, value: id, label: settings.label || id, endpoint };
         if (apiKey) model.api_key = apiKey;
         else delete model.api_key;
