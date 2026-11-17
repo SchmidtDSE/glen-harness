@@ -64,7 +64,7 @@ The reasons for keeping this code are recorded in glen's [tool-call parsing desi
 | `ui/chat-docked.css` | Styles for the chat in a page column (geo-agent's sidebar look), coloured by CSS tokens a host can override, such as `--control-bg`. |
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.1';
 const [{ Agent, ToolRegistry }, { ChatUI, buildChatPanel, loadChatDeps }] =
     await Promise.all([import(`${H}/src/index.js`), import(`${H}/ui/index.js`)]);
 
@@ -77,7 +77,7 @@ const ui = new ChatUI(agent, config, buildChatPanel(document.querySelector('#cha
 ui.addElement(cardElement);   // show a table or chart a tool made
 ```
 
-`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, and `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
+`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page, and `appVersion()` to name its own build in the export's "Generated with GLEN" line instead of the harness's tag. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
 
 ## Model list
 
@@ -118,7 +118,7 @@ With `authFailed` the chat says the data server needs a token and opens the pane
 An app whose tools all run in the page imports the `./core` entry (`src/core.js`) and the chat module:
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.1';
 const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
@@ -130,10 +130,10 @@ These load nine files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `s
 In a browser, import from jsDelivr pinned to a tag. There is no build step.
 
 ```js
-import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.0/src/index.js';
+import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.5.1/src/index.js';
 ```
 
-In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.5.0`), as the package is not yet on npm:
+In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.5.1`), as the package is not yet on npm:
 
 ```js
 import { Agent, ToolRegistry, MCPClient } from 'glen-harness';

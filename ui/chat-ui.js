@@ -418,6 +418,16 @@ export class ChatUI {
         return [];
     }
 
+    /**
+     * The host app's build, for the export's "Generated with GLEN <version>"
+     * line. Hosts override this; glen returns its own tag. Null falls back to
+     * the harness's tag, read off this module's URL.
+     * @returns {string|null}
+     */
+    appVersion() {
+        return null;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Settings panel: the visitor's LLM key (user-provided mode) and     */
     /*  MCP token (glen#442)                                                    */
@@ -1324,7 +1334,7 @@ export class ChatUI {
             s3Endpoint: exportCfg.s3Endpoint,
             codeLanguage: exportCfg.codeLanguage,
             projectUrl: exportCfg.projectUrl,
-            version: libraryVersion(),
+            version: this.appVersion() ?? libraryVersion(),
             mapEmbed: buildMapEmbedHtml(mapState, { filename: this._exportFilename() }),
             basename: this._exportFilename().replace(/\.html$/, ''),
             datasets: this._exportDatasets(sessionDatasets),

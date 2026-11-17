@@ -8,7 +8,7 @@ import { ChatUI, resolveExportConfig } from '../ui/chat-ui.js';
  * session is replayed through the same ChatUI methods the agent drives, so
  * the recording hooks are exercised too.
  */
-async function exportWith({ config = {}, turns = [], mapState = null, model = 'test-model' } = {}) {
+async function exportWith({ config = {}, turns = [], mapState = null, model = 'test-model', appVersion } = {}) {
     let captured = '';
     const RealBlob = globalThis.Blob;
     globalThis.Blob = class { constructor(parts) { captured = parts.join(''); } };
@@ -25,6 +25,7 @@ async function exportWith({ config = {}, turns = [], mapState = null, model = 't
         ui.messagesEl = document.createElement('div');
         ui.agent = { selectedModel: model };
         ui.mapManager = mapState ? { getExportState: () => mapState } : null;
+        if (appVersion !== undefined) ui.appVersion = () => appVersion;
         replay(ui, turns);
         await ui.exportHtml();
         return captured;
@@ -80,6 +81,20 @@ const oneQuery = [{
     steps: [{ name: 'query', args: { sql_query: SQL }, sqlQuery: SQL, result: '| n |\n|---|\n| 3 |' }],
     answer: 'Three.',
 }];
+
+describe('exported document: version', () => {
+    it('names the host app\'s build when the host gives one', async () => {
+        const html = await exportWith({ appVersion: 'v4.0.7' });
+        expect(html).toContain('<meta name="generator" content="GLEN v4.0.7">');
+        expect(html).toContain('GLEN <code>v4.0.7</code>');
+    });
+
+    it('falls back to the harness\'s own build without one', async () => {
+        const html = await exportWith();
+        expect(html).toContain('<meta name="generator" content="GLEN">');
+        expect(html).toContain('a development build of GLEN');
+    });
+});
 
 describe('exported document: code languages (#368)', () => {
     it('renders every query once per language', async () => {
