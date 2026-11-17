@@ -77,7 +77,7 @@ const ui = new ChatUI(agent, config, buildChatPanel(document.querySelector('#cha
 ui.addElement(cardElement);   // show a table or chart a tool made
 ```
 
-`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, and `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
+`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. A host can override `exportRow()` to put the export button in a row of its own, `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page, and `appVersion()` to name its own build in the export's "Generated with GLEN" line instead of the harness's tag. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
 
 ## Model list
 
