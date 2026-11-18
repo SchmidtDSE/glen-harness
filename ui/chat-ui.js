@@ -793,7 +793,7 @@ export class ChatUI {
         };
         document.addEventListener('keydown', escHandler);
 
-        this.addMessage('user', text);
+        this.addMarkdown('user', text, {breaks: true});
         this.startTurn();
 
         try {
@@ -1240,6 +1240,10 @@ export class ChatUI {
             });
             return;
         }
+        if (role === 'assistant') {
+            const rec = this._recordCurrent();
+            if (rec) rec.answer = rec.answer ? `${rec.answer}\n\n${md}` : md;
+        }
         if (role !== 'system' && role !== 'error') return;
         const rec = this._recordCurrent();
         const note = { role, text: String(text ?? '') };
@@ -1412,14 +1416,16 @@ export class ChatUI {
         return el;
     }
 
-    addMarkdown(role, md) {
-        if (role === 'assistant') {
-            const rec = this._recordCurrent();
-            if (rec) rec.answer = rec.answer ? `${rec.answer}\n\n${md}` : md;
-        }
+    /**
+     * @param {string} role - The role of the author of the message
+     * @param {string} md - The text to be rendered as Markdown
+     * @param {object} [markedParseOptions] - options for the markdown parser (`marked.parse`)
+     */
+    addMarkdown(role, md, markedParseOptions={}) {
+        this._recordMessage(role, md);
         const el = document.createElement('div');
         el.className = `chat-message ${role}`;
-        el.innerHTML = renderMarkdown(md);
+        el.innerHTML = renderMarkdown(md, markedParseOptions);
         this.messagesEl.appendChild(el);
 
         // Highlight code blocks
