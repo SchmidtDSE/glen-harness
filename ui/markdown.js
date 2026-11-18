@@ -57,13 +57,19 @@ export const REDACTED_KEYS = ['s3_key', 's3_secret', 's3_endpoint', 's3_scope', 
  * tokens, parse markdown, then sanitize through DOMPurify. If either page
  * global is missing, fail closed to escaped plain text rather than raw HTML.
  *
- * @param {string} md
+ * `markedParseOptions` is passed directly to `marked.parse`. Notably, this
+ * application uses `breaks: false` for messages from agents, and `breaks:
+ * true` for messages from users to preserve deliberate line break choices by
+ * the user.
+ *
+ * @param {string} md - Text to be rendered as markdown
+ * @param {object} [markedParseOptions] - options for `marked.parse`
  * @returns {string} HTML safe to assign to innerHTML
  */
-export function renderMarkdown(md) {
+export function renderMarkdown(md, markedParseOptions = {breaks: false}) {
     const text = scrubCredentials(String(md ?? ''));
     if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-        return DOMPurify.sanitize(marked.parse(text));
+        return DOMPurify.sanitize(marked.parse(text, markedParseOptions));
     }
     if (!renderMarkdown._warned) {
         renderMarkdown._warned = true;
