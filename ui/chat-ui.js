@@ -1242,7 +1242,7 @@ export class ChatUI {
         }
         if (role === 'assistant') {
             const rec = this._recordCurrent();
-            if (rec) rec.answer = rec.answer ? `${rec.answer}\n\n${md}` : md;
+            if (rec) rec.answer = rec.answer ? `${rec.answer}\n\n${text}` : text;
         }
         if (role !== 'system' && role !== 'error') return;
         const rec = this._recordCurrent();
