@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+
 import { renderMarkdown, ChatUI } from '../ui/chat-ui.js';
+import { CONFIG, mountUI } from './chat-ui-fixtures.js';
 
 // chat-ui.js consumes marked and DOMPurify as page globals (CDN script
 // tags); mirror that here with the real libraries.
@@ -111,4 +113,37 @@ describe('tool-call name escaping', () => {
         expect(body.querySelector('img')).toBeNull();
         expect(body.textContent).toContain('<img');
     });
+});
+
+describe('user messages', () => {
+  const PROMPT = 'This is a test.\n\nLet\'s find out together what happens to the line breaks!\n\n```python\ndef and_code_blocks(foo):\n    return foo\n```';
+
+  const sendMessage = async (text, { response = null } = {}) => {
+    const { mount, agent, ui } = mountUI();
+    agent.processMessage = async () => ({ response, cancelled: false });
+    mount.input.value = text;
+    await ui.handleSend();
+    return { ui, mount };
+  };
+
+  it('preserve line breaks', async () => {
+    const { mount } = await sendMessage('foo\nbar');
+    expect(mount.messages.querySelector('.chat-message.user br')).not.toBeNull();
+  });
+  it('preserve indentation', async () => {
+    const { mount } = await sendMessage(PROMPT);
+    const codeElement = mount.messages.querySelector('.chat-message.user pre code');
+    expect(codeElement).not.toBeNull();
+    expect(codeElement.textContent).toContain('    return foo');
+  });
+  it('render with code highlighting', async () => {
+    const { mount } = await sendMessage(PROMPT);
+    const codeElement = mount.messages.querySelector('.chat-message.user pre code');
+    expect(codeElement).not.toBeNull();
+    expect(codeElement.className).toContain('language-python');
+  });
+  it('record the original prompt exactly', async () => {
+    const { ui } = await sendMessage(PROMPT);
+    expect(ui.session.turns[0].prompt).toBe(PROMPT);
+  });
 });
