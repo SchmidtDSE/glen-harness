@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { ChatUI } from '../ui/chat-ui.js';
 import { buildChatPanel } from '../ui/layout.js';
 import { chatStylesheets } from '../ui/deps.js';
@@ -140,5 +141,20 @@ describe('ChatUI footer links', () => {
         mount.linksAbsorbed = true;
         const ui = new HostUI(new Agent(CONFIG, new ToolRegistry()), CONFIG, mount);
         expect(ui.footerEl.querySelectorAll('a.footer-link')).toHaveLength(0);
+    });
+});
+
+describe('a user message', () => {
+    it('keeps its line breaks and indentation (#13)', () => {
+        const style = document.createElement('style');
+        style.textContent = readFileSync('ui/chat.css', 'utf8');
+        document.head.appendChild(style);
+        const { ui } = mountUI();
+        const text = 'Use this:\n\ndef f(x):\n    return x';
+        ui.addMessage('user', text);
+        const el = [...document.querySelectorAll('.chat-message.user')].at(-1);
+        expect(el.textContent).toBe(text);
+        expect(getComputedStyle(el).whiteSpace).toBe('pre-wrap');
+        style.remove();
     });
 });

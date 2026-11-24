@@ -357,6 +357,8 @@
 
 .chat-message.user {
     align-self: flex-end;
+    /* The message as typed: line breaks and indentation, as in pasted code (#13). */
+    white-space: pre-wrap;
     background: rgba(0, 122, 255, 0.8);
     color: #fff;
 }
