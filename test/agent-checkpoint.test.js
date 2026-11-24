@@ -247,3 +247,26 @@ describe('Agent resume', () => {
         expect(agent.suspendedTurn.sqlQueries.length).toBe(2);
     });
 });
+
+describe('Agent tool results', () => {
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('pass each call\'s arguments to onToolResults', async () => {
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [
+                    { id: 'c1', type: 'function', function: { name: 'query', arguments: '{"sql_query":"SELECT 1","s3_scope":"s3://b"}' } },
+                ] } }] }),
+            })
+            .mockResolvedValueOnce(okText('done'));
+        const agent = new Agent(baseConfig(), stubRegistry({
+            execute: async (name) => ({ success: true, name, result: '| 1 |', source: 'remote', sqlQuery: 'SELECT 1' }),
+        }));
+        agent.autoApprove = true;
+        const seen = [];
+        agent.onToolResults = (results) => seen.push(...results);
+        await agent.processMessage('go');
+        expect(seen[0]).toMatchObject({ name: 'query', sqlQuery: 'SELECT 1', args: { sql_query: 'SELECT 1', s3_scope: 's3://b' } });
+    });
+});

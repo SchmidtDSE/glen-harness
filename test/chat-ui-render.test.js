@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { renderMarkdown, ChatUI } from '../ui/chat-ui.js';
@@ -110,5 +110,57 @@ describe('tool-call name escaping', () => {
         const body = row.querySelector('.agent-turn-row-body');
         expect(body.querySelector('img')).toBeNull();
         expect(body.textContent).toContain('<img');
+    });
+});
+
+describe('result actions (addResultAction)', () => {
+    function setup() {
+        const ui = Object.create(ChatUI.prototype);
+        ui._resultActions = [];
+        const row = document.createElement('details');
+        row.innerHTML = '<summary><span class="row-status running"></span></summary>' +
+            '<div class="agent-turn-row-body"></div>';
+        ui.currentTurn = { rowsByIter: new Map([[1, row]]) };
+        ui.scrollToBottom = () => {};
+        return { ui, body: row.querySelector('.agent-turn-row-body') };
+    }
+
+    it('puts an action\'s elements under the result it was given', () => {
+        const { ui, body } = setup();
+        const seen = [];
+        ui.addResultAction(r => {
+            seen.push(r);
+            if (r.name !== 'query') return null;
+            const b = document.createElement('button');
+            b.textContent = 'CSV';
+            return b;
+        });
+        ui.showToolResults([
+            { name: 'get_schema', success: true, result: '{}' },
+            { name: 'query', success: true, result: '| a |', sqlQuery: 'SELECT 1 AS a' },
+        ], 1);
+        const items = body.querySelectorAll('.tool-result-item');
+        expect(items[0].querySelector('.tool-result-actions')).toBeNull();
+        expect(items[1].querySelector('.tool-result-actions button').textContent).toBe('CSV');
+        expect(seen.map(r => r.sqlQuery ?? null)).toEqual([null, 'SELECT 1 AS a']);
+    });
+
+    it('takes several elements, and a failing action costs only its own', () => {
+        const { ui, body } = setup();
+        ui.addResultAction(() => { throw new Error('boom'); });
+        ui.addResultAction(() => ['a', 'b'].map(t => Object.assign(document.createElement('button'), { textContent: t })));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        ui.showToolResults([{ name: 'query', success: true, result: 'ok' }], 1);
+        warn.mockRestore();
+        expect([...body.querySelectorAll('.tool-result-actions button')].map(b => b.textContent)).toEqual(['a', 'b']);
+        expect(body.querySelector('.tool-output').textContent).toBe('ok');
+    });
+
+    it('stops adding once removed', () => {
+        const { ui, body } = setup();
+        const off = ui.addResultAction(() => document.createElement('button'));
+        off();
+        ui.showToolResults([{ name: 'query', success: true, result: 'ok' }], 1);
+        expect(body.querySelector('.tool-result-actions')).toBeNull();
     });
 });

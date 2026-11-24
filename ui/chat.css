@@ -830,6 +830,34 @@ details[open]>.query-summary-btn::before {
     margin: 4px 0;
 }
 
+/* Controls a host adds under a result (ChatUI.addResultAction). */
+.tool-result-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.tool-result-actions button {
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid rgba(74, 144, 226, 0.4);
+    border-radius: 4px;
+    background: transparent;
+    color: #2c5282;
+    cursor: pointer;
+}
+
+.tool-result-actions button:hover:not(:disabled) {
+    background: rgba(74, 144, 226, 0.08);
+}
+
+.tool-result-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .sql-detail summary {
     font-size: 11px;
     color: #4a90e2;

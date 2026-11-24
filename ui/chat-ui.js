@@ -68,6 +68,8 @@ export class ChatUI {
         // Set by main.js; the export cites the datasets a session used from it.
         this.catalog = null;
         this.busy = false;
+        // Functions that add controls under a tool result (addResultAction).
+        this._resultActions = [];
 
         // Cache DOM refs from layout-manager (no getElementById here).
         this.container = mount.container;
@@ -1144,6 +1146,44 @@ export class ChatUI {
      * Mutate the tool row created in showToolProposal: change its status
      * icon and append the result panels to the body.
      */
+    /**
+     * Add controls under tool results, such as a button that downloads a
+     * query's rows. `fn` is called with each result as it is shown
+     * ({ name, args, success, source, result, sqlQuery }) and returns an element,
+     * an array of elements, or nothing. A function that throws costs its own
+     * controls, not the result.
+     *
+     * @param {(result: Object) => (Element|Element[]|null|undefined)} fn
+     * @returns {() => void} removes the function again
+     */
+    addResultAction(fn) {
+        if (typeof fn !== 'function') throw new TypeError('addResultAction takes a function');
+        this._resultActions.push(fn);
+        return () => { this._resultActions = this._resultActions.filter(f => f !== fn); };
+    }
+
+    _addResultActions(list, results) {
+        const actions = this._resultActions || [];
+        if (!actions.length || !list) return;
+        const items = list.querySelectorAll(':scope > .tool-result-item');
+        results.forEach((r, i) => {
+            const els = [];
+            for (const fn of actions) {
+                try {
+                    const out = fn(r);
+                    for (const el of [].concat(out ?? [])) if (el?.nodeType === 1) els.push(el);
+                } catch (err) {
+                    console.warn('[ChatUI] result action failed:', err);
+                }
+            }
+            if (!els.length || !items[i]) return;
+            const bar = document.createElement('div');
+            bar.className = 'tool-result-actions';
+            bar.append(...els);
+            items[i].appendChild(bar);
+        });
+    }
+
     showToolResults(results, iteration) {
         this._recordResults(results, iteration);
         if (!this.currentTurn) return;
@@ -1179,6 +1219,7 @@ export class ChatUI {
         }
         resultsHtml += '</div>';
         body.insertAdjacentHTML('beforeend', resultsHtml);
+        this._addResultActions(body.lastElementChild, results);
 
         // Highlight any new SQL blocks in the appended results
         body.querySelectorAll('code.language-sql:not(.hljs)').forEach(el => {
