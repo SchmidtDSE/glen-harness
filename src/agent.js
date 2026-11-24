@@ -311,7 +311,10 @@ export class Agent {
                     }
 
                     const execResult = await withAbort(this.toolRegistry.execute(tc.function.name, args));
-                    results.push(execResult);
+                    // The call's arguments ride along for the host's result
+                    // actions (ChatUI.addResultAction), such as a download
+                    // that re-runs a query with the same endpoint.
+                    results.push({ ...execResult, args });
 
                     // Track SQL queries
                     if (execResult.sqlQuery) sqlQueries.push(execResult.sqlQuery);
