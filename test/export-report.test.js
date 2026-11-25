@@ -242,7 +242,7 @@ describe('render_chart in the report', () => {
         const TEMPLATE = "SELECT y, sum(a) AS n FROM t WHERE y BETWEEN {{Y_MIN}} AND {{Y_MAX}} GROUP BY y";
         const FILLED = "SELECT y, sum(a) AS n FROM t WHERE y BETWEEN 2010 AND 2020 GROUP BY y";
         const live = () => chart({ args: { chart_type: 'bar', x: 'y', y: 'n', sql: TEMPLATE } });
-        const lookup = (id) => (id === 'chart-1' ? { sql: FILLED, settings: [{ label: 'Years', value: '2010 – 2020' }, { label: 'Unit', value: 'km²' }] } : null);
+        const lookup = (id) => (id === 'chart-1' ? { sql: FILLED, title: 'Loss in km²', settings: [{ label: 'Years', value: '2010 – 2020' }, { label: 'Unit', value: 'km²' }] } : null);
 
         it('carries its query at the settings shown, on a copy of the record', () => {
             const record = { turns: [turn({ steps: [live(), query()] })] };
@@ -259,6 +259,7 @@ describe('render_chart in the report', () => {
             expect(doc.querySelector('main .chunk .code-variant[data-lang="sql"]').textContent).toBe(FILLED);
             const caption = doc.querySelector('figcaption').textContent;
             expect(caption).toContain('Shown at Years: 2010 – 2020; Unit: km²');
+            expect(caption.startsWith('Loss in km².')).toBe(true);
             expect(caption).toContain('re-ran when these settings changed');
             expect(buildScript(record, 'r')).toContain('BETWEEN 2010 AND 2020');
             expect(buildScript(record, 'r')).not.toContain('{{');

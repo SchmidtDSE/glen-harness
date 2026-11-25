@@ -496,13 +496,13 @@ export function chartIdOf(step) {
  * whose SQL uses the host's settings (glen's {{TOKEN}}s) re-runs when the
  * reader changes them, so the SQL the model wrote does not run as written, and
  * the figure is drawn at whatever settings were last chosen. `lookup(chartId)`
- * gives `{ sql, settings }` for such a chart: its SQL with the current values
- * filled in, and those settings as `{ label, value }` pairs. Each of its steps
- * then carries `exportSql` and `exportSettings`, so the code, the scripts and
- * the figure agree. Charts the lookup does not know are left as they are.
+ * gives `{ sql, settings, title }` for such a chart: its SQL with the current
+ * values filled in, those settings as `{ label, value }` pairs, and its title
+ * as shown. Each of its steps then carries `exportSql`, `exportSettings` and
+ * `exportTitle`, so the code, the scripts and the figure agree. Charts the lookup does not know are left as they are.
  *
  * @param {{turns: object[]}} record
- * @param {(chartId: string) => ({sql: string, settings?: {label: string, value: string}[]}|null)} [lookup]
+ * @param {(chartId: string) => ({sql: string, settings?: {label: string, value: string}[], title?: string}|null)} [lookup]
  * @returns {{turns: object[]}} a copy; the record itself is not changed
  */
 export function withChartQueries(record, lookup) {
@@ -526,7 +526,7 @@ export function withChartQueries(record, lookup) {
                 if (!q) return step;
                 const settings = (q.settings || []).filter(x => x && x.label != null)
                     .map(x => ({ label: String(x.label), value: String(x.value ?? '') }));
-                return { ...step, exportSql: q.sql, exportSettings: settings };
+                return { ...step, exportSql: q.sql, exportSettings: settings, ...(typeof q.title === 'string' && { exportTitle: q.title }) };
             }),
         })),
     };
@@ -578,7 +578,8 @@ function chunkOutputHtml(step, renderMd, figures) {
  */
 function chartOutputHtml(step, figures) {
     const a = step.args || {};
-    const title = a.title ? escapeHtmlText(a.title) : `${escapeHtmlText(a.chart_type || '')} chart`;
+    const shownTitle = step.exportTitle ?? a.title;
+    const title = shownTitle ? escapeHtmlText(shownTitle) : `${escapeHtmlText(a.chart_type || '')} chart`;
     const id = chartIdOf(step);
     const svg = id && figures?.get(id);
     const inline = !stepSql(step) && Array.isArray(a.data)
