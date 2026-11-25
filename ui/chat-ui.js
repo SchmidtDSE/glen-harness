@@ -54,8 +54,10 @@ export class ChatUI {
      *   HTML export to embed the final map state; optional so tests and
      *   headless harnesses can construct a ChatUI without a live map.
      * @param {Object} [chartRenderer] - geo-agent's ChartRenderer,
-     *   used by the HTML export to re-draw each chart as a figure; null when
-     *   the app has charts off.
+     *   used by the HTML export to re-draw each chart as a figure
+     *   (exportFigure) and, for a chart that follows the host's settings, to
+     *   give its query at the settings shown (exportQuery); null when the app
+     *   has charts off.
      */
     constructor(agent, config, mount, mapManager = null, chartRenderer = null) {
         this.agent = agent;
@@ -1338,7 +1340,7 @@ export class ChatUI {
             this.addMessage('error', "couldn't load the export — check your connection and try again");
             return;
         }
-        const { buildReportHtml, buildMapEmbedHtml, chartIdOf, libraryVersion, sessionDatasets } = report;
+        const { buildReportHtml, buildMapEmbedHtml, chartIdOf, libraryVersion, sessionDatasets, withChartQueries } = report;
         const exportCfg = this.exportConfig || resolveExportConfig(this.config);
 
         // Capture the final map state (one map per saved log). Guarded so a
@@ -1353,7 +1355,10 @@ export class ChatUI {
         // Each chart the session drew, re-drawn as a static figure. Guarded
         // like the map: a failed figure costs the figure, not the export.
         const figures = new Map();
-        for (const turn of this._session().turns) {
+        // A live chart's query at the settings its figure shows, from the
+        // host's chart renderer (exportQuery), so the code matches the figure.
+        const record = withChartQueries(this._session(), (id) => this.chartRenderer?.exportQuery?.(id));
+        for (const turn of record.turns) {
             for (const step of turn.steps) {
                 const id = chartIdOf(step);
                 if (!id || figures.has(id)) continue;
@@ -1366,7 +1371,7 @@ export class ChatUI {
             }
         }
 
-        const html = buildReportHtml(this._session(), {
+        const html = buildReportHtml(record, {
             figures,
             title: this._exportTitle(),
             appTitle: document.title || 'GLEN',
@@ -1378,7 +1383,7 @@ export class ChatUI {
             version: this.appVersion() ?? libraryVersion(),
             mapEmbed: buildMapEmbedHtml(mapState, { filename: this._exportFilename() }),
             basename: this._exportFilename().replace(/\.html$/, ''),
-            datasets: this._exportDatasets(sessionDatasets),
+            datasets: this._exportDatasets(sessionDatasets, record),
         });
 
         try {
@@ -1402,12 +1407,12 @@ export class ChatUI {
      * The datasets the session used, for the report's Data sources section.
      * Guarded like the map: a failure costs the citations, not the export.
      */
-    _exportDatasets(sessionDatasets) {
+    _exportDatasets(sessionDatasets, record = this._session()) {
         try {
             const entries = this.catalog?.getAll?.() || [];
             const onMap = [...(this.mapManager?.layers?.values?.() || [])]
                 .filter(s => s.visible && s.datasetId).map(s => s.datasetId);
-            return sessionDatasets(this._session(), entries, onMap);
+            return sessionDatasets(record, entries, onMap);
         } catch (err) {
             console.warn('[ChatUI] data-source capture for export failed:', err);
             return [];

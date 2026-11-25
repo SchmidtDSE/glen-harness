@@ -430,6 +430,8 @@ export const CONSULT_TOOLS = new Set([
  * @returns {string|null}
  */
 export function stepSql(step) {
+    // A live chart's query at the settings its figure shows (withChartQueries).
+    if (typeof step?.exportSql === 'string' && step.exportSql.trim()) return step.exportSql;
     const remote = step?.source === 'remote';
     const fromArgs = sqlArg(step?.args, remote)?.sql;
     const recorded = typeof step?.sqlQuery === 'string' && step.sqlQuery.trim() ? step.sqlQuery : null;
@@ -489,6 +491,47 @@ export function chartIdOf(step) {
     }
 }
 
+/**
+ * The session with each live chart's query as the export shows it. A chart
+ * whose SQL uses the host's settings (glen's {{TOKEN}}s) re-runs when the
+ * reader changes them, so the SQL the model wrote does not run as written, and
+ * the figure is drawn at whatever settings were last chosen. `lookup(chartId)`
+ * gives `{ sql, settings }` for such a chart: its SQL with the current values
+ * filled in, and those settings as `{ label, value }` pairs. Each of its steps
+ * then carries `exportSql` and `exportSettings`, so the code, the scripts and
+ * the figure agree. Charts the lookup does not know are left as they are.
+ *
+ * @param {{turns: object[]}} record
+ * @param {(chartId: string) => ({sql: string, settings?: {label: string, value: string}[]}|null)} [lookup]
+ * @returns {{turns: object[]}} a copy; the record itself is not changed
+ */
+export function withChartQueries(record, lookup) {
+    if (typeof lookup !== 'function') return record;
+    const cache = new Map();
+    const query = (id) => {
+        if (!cache.has(id)) {
+            let q = null;
+            try { q = lookup(id) || null; } catch { q = null; }
+            cache.set(id, q && typeof q.sql === 'string' && q.sql.trim() ? q : null);
+        }
+        return cache.get(id);
+    };
+    return {
+        ...record,
+        turns: (record?.turns || []).map(t => ({
+            ...t,
+            steps: (t.steps || []).map((step) => {
+                const id = chartIdOf(step);
+                const q = id && query(id);
+                if (!q) return step;
+                const settings = (q.settings || []).filter(x => x && x.label != null)
+                    .map(x => ({ label: String(x.label), value: String(x.value ?? '') }));
+                return { ...step, exportSql: q.sql, exportSettings: settings };
+            }),
+        })),
+    };
+}
+
 /** The distinct models a session used, in order of first use. */
 export function sessionModels(record) {
     const seen = new Map();
@@ -541,10 +584,13 @@ function chartOutputHtml(step, figures) {
     const inline = !stepSql(step) && Array.isArray(a.data)
         ? ` Plotted from ${a.data.length} row${a.data.length === 1 ? '' : 's'} the model passed inline (listed in the <a href="#session-log">session log</a>).`
         : '';
+    const settings = step.exportSettings?.length
+        ? ` Shown at ${step.exportSettings.map(x => `${escapeHtmlText(x.label)}: ${escapeHtmlText(x.value)}`).join('; ')}. In the app this chart re-ran when these settings changed; the code above is its query at these settings.`
+        : '';
     if (!svg) {
-        return `<p class="chunk-effect">→ Plotted as a chart: ${title}. The figure could not be carried into this export.${inline}</p>`;
+        return `<p class="chunk-effect">→ Plotted as a chart: ${title}. The figure could not be carried into this export.${inline}${settings}</p>`;
     }
-    return `<figure class="chunk-figure">${svg}<figcaption>${title}.${inline}</figcaption></figure>`;
+    return `<figure class="chunk-figure">${svg}<figcaption>${title}.${inline}${settings}</figcaption></figure>`;
 }
 
 /** One code variant per language, only the chosen one visible. */
