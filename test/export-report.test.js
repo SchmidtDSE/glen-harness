@@ -4,7 +4,7 @@ import {
     buildReportHtml, classifyStep, stepSql, isFailedStep, libraryVersion,
     sessionModels, chartIdOf, GLEN_PROJECT_URL,
     sessionQueries, buildScript, buildQmd, buildIpynb, buildSessionFiles, wrapQuery, SPEED_NOTE,
-    datasetCitation, sessionDatasets,
+    datasetCitation, sessionDatasets, withChartQueries,
 } from '../ui/export-report.js';
 import { ChatUI, resolveExportConfig } from '../ui/chat-ui.js';
 
@@ -238,6 +238,41 @@ describe('render_chart in the report', () => {
         expect(doc.querySelector('main .chunk-effect').textContent).toContain('could not be carried');
     });
 
+    describe('a chart that follows the settings', () => {
+        const TEMPLATE = "SELECT y, sum(a) AS n FROM t WHERE y BETWEEN {{Y_MIN}} AND {{Y_MAX}} GROUP BY y";
+        const FILLED = "SELECT y, sum(a) AS n FROM t WHERE y BETWEEN 2010 AND 2020 GROUP BY y";
+        const live = () => chart({ args: { chart_type: 'bar', x: 'y', y: 'n', sql: TEMPLATE } });
+        const lookup = (id) => (id === 'chart-1' ? { sql: FILLED, title: 'Loss in km²', settings: [{ label: 'Years', value: '2010 – 2020' }, { label: 'Unit', value: 'km²' }] } : null);
+
+        it('carries its query at the settings shown, on a copy of the record', () => {
+            const record = { turns: [turn({ steps: [live(), query()] })] };
+            const out = withChartQueries(record, lookup);
+            expect(stepSql(out.turns[0].steps[0])).toBe(FILLED);
+            expect(out.turns[0].steps[0].exportSettings).toEqual([{ label: 'Years', value: '2010 – 2020' }, { label: 'Unit', value: 'km²' }]);
+            expect(out.turns[0].steps[1]).toBe(record.turns[0].steps[1]);
+            expect(stepSql(record.turns[0].steps[0])).toBe(TEMPLATE);
+        });
+
+        it('shows that query as the code, says which settings the figure shows, and runs it in the scripts', () => {
+            const record = withChartQueries({ turns: [turn({ steps: [live()] })] }, lookup);
+            const { doc } = report(record.turns, { figures: new Map([['chart-1', SVG]]) });
+            expect(doc.querySelector('main .chunk .code-variant[data-lang="sql"]').textContent).toBe(FILLED);
+            const caption = doc.querySelector('figcaption').textContent;
+            expect(caption).toContain('Shown at Years: 2010 – 2020; Unit: km²');
+            expect(caption.startsWith('Loss in km².')).toBe(true);
+            expect(caption).toContain('re-ran when these settings changed');
+            expect(buildScript(record, 'r')).toContain('BETWEEN 2010 AND 2020');
+            expect(buildScript(record, 'r')).not.toContain('{{');
+        });
+
+        it('leaves a chart alone when the lookup does not know it, or fails', () => {
+            const record = { turns: [turn({ steps: [live()] })] };
+            expect(stepSql(withChartQueries(record, () => null).turns[0].steps[0])).toBe(TEMPLATE);
+            expect(stepSql(withChartQueries(record, () => { throw new Error('x'); }).turns[0].steps[0])).toBe(TEMPLATE);
+            expect(withChartQueries(record, undefined)).toBe(record);
+        });
+    });
+
     it('leaves a failed chart to the log', () => {
         const { doc } = report([turn({ steps: [chart({ result: '{"success": false, "error": "no rows"}' })] })]);
         expect(doc.querySelector('main .chunk')).toBe(null);
@@ -269,6 +304,39 @@ describe('ChatUI export: charts', () => {
             await ui.exportHtml();
             expect(asked).toEqual(['chart-7']);
             expect(captured).toContain('<svg id="drawn"></svg>');
+        } finally {
+            globalThis.Blob = RealBlob;
+            globalThis.URL = realUrl;
+            window.HTMLAnchorElement.prototype.click = realClick;
+        }
+    });
+
+    it('takes a live chart\'s query at the shown settings from the renderer', async () => {
+        let captured = '';
+        const RealBlob = globalThis.Blob, realUrl = globalThis.URL;
+        const realClick = window.HTMLAnchorElement.prototype.click;
+        globalThis.Blob = class { constructor(parts) { captured = parts.join(''); } };
+        globalThis.URL = { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} };
+        window.HTMLAnchorElement.prototype.click = () => {};
+        try {
+            const ui = Object.create(ChatUI.prototype);
+            ui.config = {};
+            ui.exportConfig = resolveExportConfig({});
+            ui.messagesEl = document.createElement('div');
+            ui.agent = { selectedModel: 'm' };
+            ui.chartRenderer = {
+                exportFigure: () => '<svg id="drawn"></svg>',
+                exportQuery: (id) => (id === 'chart-7' ? { sql: 'SELECT 2020 AS year_shown', settings: [{ label: 'Year', value: '2020' }] } : null),
+            };
+            ui.addMessage('user', 'chart it');
+            ui.startTurn();
+            ui.showToolProposal([{ id: 'a', type: 'function', function: { name: 'render_chart', arguments: '{"chart_type":"bar","x":"a","y":"b","sql":"SELECT {{YEAR}} AS year_shown"}' } }], null, 1, true);
+            ui.showToolResults([{ name: 'render_chart', success: true, source: 'local', result: '{"success":true,"chart_id":"chart-7"}' }], 1);
+            ui.endTurn('done');
+            await ui.exportHtml();
+            expect(captured).toContain('SELECT 2020 AS year_shown');
+            expect(captured).toContain('Shown at Year: 2020');
+            expect(ui._session().turns[0].steps[0].exportSql).toBeUndefined();
         } finally {
             globalThis.Blob = RealBlob;
             globalThis.URL = realUrl;
