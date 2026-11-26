@@ -73,16 +73,24 @@ export class ModelListError extends Error {
 }
 
 /**
- * The model service's endpoint and key. `llm_endpoint` names it. During the
- * move to it, a config with only `llm_models` uses the first entry's
- * endpoint; the entries' names and settings are ignored (glen#542). The key,
- * `llm_api_key`, is for hosts with no server in front to add one, such as a
- * headless runner; a browser app leaves it unset and sends no Authorization
- * header (glen#420).
+ * The model service's endpoint and key, in the usual OpenAI-compatible shape:
+ * `llm_endpoint` and an optional `llm_api_key`. With a key, /models and chat
+ * requests carry `Authorization: Bearer <key>`; without one they carry no
+ * header, so a deployment behind basic auth keeps its saved login (glen#420).
+ *
+ * During the move to `llm_endpoint`, a config with only `llm_models` uses the
+ * first entry's endpoint and key; the entries' names and settings are ignored
+ * (glen#542). Apps whose nginx checks the bearer against an app token keep it
+ * in that key today.
  */
 export function modelEndpoint(config = {}) {
-    const endpoint = config.llm_endpoint || config.llm_models?.[0]?.endpoint || null;
-    return endpoint ? { endpoint, apiKey: config.llm_api_key || undefined } : null;
+    if (config.llm_endpoint) {
+        return { endpoint: config.llm_endpoint, apiKey: config.llm_api_key || undefined };
+    }
+    const first = config.llm_models?.[0];
+    return first?.endpoint
+        ? { endpoint: first.endpoint, apiKey: config.llm_api_key || first.api_key || undefined }
+        : null;
 }
 
 /**

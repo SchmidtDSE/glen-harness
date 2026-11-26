@@ -4,6 +4,7 @@ import {
     applyProxyModelList, buildUserModels, loadUserSettings, fetchModelIds,
     STORAGE_KEY_API, STORAGE_KEY_ENDPOINT, STORAGE_KEY_MODEL,
 } from '../src/llm-models.js';
+import { Agent } from '../src/agent.js';
 
 const tierList = (over = {}) => ({
     object: 'list', tier: 'public', default_model: 'deepseek-v4-flash',
@@ -63,9 +64,15 @@ describe('modelEndpoint (glen#542)', () => {
         expect(modelEndpoint({ llm_endpoint: '/api/llm' })).toEqual({ endpoint: '/api/llm', apiKey: undefined });
         expect(modelEndpoint({ llm_endpoint: '/api/llm', llm_api_key: 'k' })).toEqual({ endpoint: '/api/llm', apiKey: 'k' });
     });
-    it('falls back to the first llm_models endpoint, ignoring its key and the other entries', () => {
-        const config = { llm_models: [{ value: 'a', endpoint: '/a', api_key: 'old' }, { value: 'b', endpoint: '/b' }] };
-        expect(modelEndpoint(config)).toEqual({ endpoint: '/a', apiKey: undefined });
+    it('falls back to the first llm_models entry\'s endpoint and key, ignoring the other entries', () => {
+        const config = { llm_models: [{ value: 'a', endpoint: '/a', api_key: 'app-token' }, { value: 'b', endpoint: '/b', api_key: 'x' }] };
+        expect(modelEndpoint(config)).toEqual({ endpoint: '/a', apiKey: 'app-token' });
+        expect(modelEndpoint({ ...config, llm_api_key: 'k' })).toEqual({ endpoint: '/a', apiKey: 'k' });
+        expect(modelEndpoint({ llm_models: [{ value: 'a', endpoint: '/a' }] })).toEqual({ endpoint: '/a', apiKey: undefined });
+    });
+    it('takes no key from llm_models once llm_endpoint is set', () => {
+        expect(modelEndpoint({ llm_endpoint: '/e', llm_models: [{ endpoint: '/a', api_key: 'old' }] }))
+            .toEqual({ endpoint: '/e', apiKey: undefined });
     });
     it('is null with no endpoint', () => {
         expect(modelEndpoint({})).toBeNull();
@@ -138,6 +145,39 @@ describe('applyProxyModelList (glen#542)', () => {
         await applyProxyModelList(config, { fetchImpl: f });
         expect(f.mock.calls[0][1].headers).toEqual({ Authorization: 'Bearer k' });
         expect(config.llm_models.every(m => m.api_key === 'k')).toBe(true);
+    });
+
+    it('keeps an old-form config\'s app token as the bearer, on /models and on chat requests', async () => {
+        // bosl-high-seas-private, naturetrace and tpl-internal: nginx returns 403
+        // unless the bearer equals APP_TOKEN, today in llm_models[0].api_key.
+        const config = { llm_models: [{ value: 'old-name', endpoint: '/api/llm', api_key: 'APP_TOKEN' }] };
+        const f = okFetch(tierList());
+        await applyProxyModelList(config, { fetchImpl: f });
+        expect(f.mock.calls[0][1].headers).toEqual({ Authorization: 'Bearer APP_TOKEN' });
+        expect(config.llm_models.every(m => m.api_key === 'APP_TOKEN')).toBe(true);
+
+        const agent = new Agent(config, { getToolsForLLM: () => [] });
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] }),
+        }));
+        await agent.processMessage('q');
+        const [url, opts] = global.fetch.mock.calls[0];
+        expect(url).toBe('/api/llm/chat/completions');
+        expect(opts.headers.Authorization).toBe('Bearer APP_TOKEN');
+        expect(JSON.parse(opts.body).model).toBe('deepseek-v4-flash');
+    });
+
+    it('sends no Authorization header on chat requests when there is no key', async () => {
+        const config = { llm_endpoint: '/api/llm' };
+        await applyProxyModelList(config, { fetchImpl: okFetch(tierList()) });
+        const agent = new Agent(config, { getToolsForLLM: () => [] });
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] }),
+        }));
+        await agent.processMessage('q');
+        expect(global.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
     });
 
     it('throws ModelListError, leaving the config alone, when the service cannot be reached or answers wrongly', async () => {
