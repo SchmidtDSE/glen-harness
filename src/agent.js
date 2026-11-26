@@ -35,6 +35,20 @@ const RESPONSE_END = new WeakMap();
 // which are also user messages.
 const TURN_OPENERS = new WeakSet();
 
+// A sentence that announces work the model is about to do (glen-harness#26):
+// "Let me (also) verify…", "I'll now run…", "Next, I'll check…". And phrases
+// that make such a sentence an offer to the user instead.
+// Computing words are left out: "Let me calculate: 26.5 / 101.5 = 26.1%"
+// does the arithmetic in place, and so does "Let's compute …".
+const ACTIONS = '(?:verify|check|confirm|double[- ]check|validate|query|look\\s+up|look\\s+into|'
+    + 're-?run|run|fetch|pull|search|investigate|test)';
+const ANNOUNCE = new RegExp(
+    "\\b(?:let me|i(?:'ll| will| am going to|'m going to)|next,? i(?:'ll| will))\\s+"
+        + `(?:(?:also|now|quickly|first|just|then|still|go\\s+ahead\\s+and)\\s+)*${ACTIONS}\\b`,
+    'i',
+);
+const OFFER = /\b(?:want me to|would you like|should i|shall i|if you(?:'d| would)? like|if you want|if needed|i can|i could|happy to|let me know|can also|tell me|say which|just say|and i(?:'ll| will))\b/i;
+
 // Tool calls recovered from a reply's text (#288, #295), keyed by that reply.
 // Within its turn the reply goes upstream as the model wrote it. When the
 // turn is kept as history, the reply is rewritten with these calls as its
@@ -267,6 +281,11 @@ export class Agent {
         // once before the turn gives up.
         let emptyRetries = 0;
         const MAX_EMPTY_RETRIES = 1;
+        // Announced-but-not-run retries this turn (glen-harness#26): a final
+        // answer that says "Let me also verify …" with no tool call is asked
+        // once to run the check or answer without announcing it.
+        let announceRetries = 0;
+        const MAX_ANNOUNCE_RETRIES = 1;
 
         try {
         while (true) {
@@ -489,6 +508,22 @@ export class Agent {
                     sqlQueries,
                     cancelled: false
                 };
+            }
+
+            // A final answer that announces work it did not do (#26), such as
+            // "Let me also verify there's nothing closer…" with no tool call.
+            // Ask once to do it or to answer without announcing it. The
+            // announcing reply and the prompt are left out of history.
+            const announced = announceRetries < MAX_ANNOUNCE_RETRIES ? this.announcedCheck(content) : null;
+            if (announced) {
+                announceRetries++;
+                console.info(`[Agent] Final answer announces a check with no tool call: "${announced}"`);
+                turnMessages.push(harnessPrompt(
+                    `Your reply says "${announced}", but you called no tool, so that has not happened. `
+                        + 'Call the tool now to do it, or give your final answer without saying you will '
+                        + 'do something you have not done.',
+                ));
+                continue;
             }
 
             // Keep the whole turn, tool calls and results included, as history
@@ -1309,6 +1344,30 @@ export class Agent {
             if (this.toolRegistry.has(m[1])) return true;
         }
         return false;
+    }
+
+    /**
+     * The sentence in a final answer that announces a check or computation
+     * the model is about to do, such as "Let me also verify …" or "I'll run a
+     * query for …", or null (glen-harness#26). A reply with no tool call
+     * cannot do what such a sentence says.
+     *
+     * Offers to the user ("Want me to check…?", "I can verify…", "If you'd
+     * like, I'll run…") and questions are not announcements, and neither is
+     * anything in a code block or a quote.
+     */
+    announcedCheck(content) {
+        if (!content) return null;
+        const text = content
+            .replace(/```[\s\S]*?```/g, ' ')
+            .split('\n').filter(line => !/^\s*>/.test(line)).join('\n');
+        for (const raw of text.split(/(?<=[.!?:])\s+|\n+/)) {
+            const sentence = raw.trim();
+            if (!sentence || sentence.endsWith('?')) continue;
+            if (OFFER.test(sentence)) continue;
+            if (ANNOUNCE.test(sentence)) return sentence.length > 160 ? `${sentence.slice(0, 157)}...` : sentence;
+        }
+        return null;
     }
 
     /**
