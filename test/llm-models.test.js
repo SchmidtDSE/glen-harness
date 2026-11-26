@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-    modelsUrl, fetchModelList, sharedEndpoint, modelsFromTierList,
+    modelsUrl, fetchModelList, modelEndpoint, modelsFromTierList, ModelListError,
     applyProxyModelList, buildUserModels, loadUserSettings, fetchModelIds,
     STORAGE_KEY_API, STORAGE_KEY_ENDPOINT, STORAGE_KEY_MODEL,
 } from '../src/llm-models.js';
+import { Agent } from '../src/agent.js';
 
 const tierList = (over = {}) => ({
     object: 'list', tier: 'public', default_model: 'deepseek-v4-flash',
@@ -58,110 +59,161 @@ describe('fetchModelList', () => {
     });
 });
 
-describe('sharedEndpoint', () => {
-    it('finds the endpoint and key all models share', () => {
-        expect(sharedEndpoint([{ endpoint: '/api/llm' }, { endpoint: '/api/llm' }]))
-            .toEqual({ endpoint: '/api/llm', apiKey: undefined });
+describe('modelEndpoint (glen#542)', () => {
+    it('reads llm_endpoint, and llm_api_key only when set', () => {
+        expect(modelEndpoint({ llm_endpoint: '/api/llm' })).toEqual({ endpoint: '/api/llm', apiKey: undefined });
+        expect(modelEndpoint({ llm_endpoint: '/api/llm', llm_api_key: 'k' })).toEqual({ endpoint: '/api/llm', apiKey: 'k' });
     });
-    it('is null when models differ, lack an endpoint, or are absent', () => {
-        expect(sharedEndpoint([{ endpoint: '/a' }, { endpoint: '/b' }])).toBeNull();
-        expect(sharedEndpoint([{ endpoint: '/a', api_key: 'x' }, { endpoint: '/a', api_key: 'y' }])).toBeNull();
-        expect(sharedEndpoint([{ value: 'm' }])).toBeNull();
-        expect(sharedEndpoint([])).toBeNull();
-        expect(sharedEndpoint(undefined)).toBeNull();
+    it('falls back to the first llm_models entry\'s endpoint and key, ignoring the other entries', () => {
+        const config = { llm_models: [{ value: 'a', endpoint: '/a', api_key: 'app-token' }, { value: 'b', endpoint: '/b', api_key: 'x' }] };
+        expect(modelEndpoint(config)).toEqual({ endpoint: '/a', apiKey: 'app-token' });
+        expect(modelEndpoint({ ...config, llm_api_key: 'k' })).toEqual({ endpoint: '/a', apiKey: 'k' });
+        expect(modelEndpoint({ llm_models: [{ value: 'a', endpoint: '/a' }] })).toEqual({ endpoint: '/a', apiKey: undefined });
+    });
+    it('takes no key from llm_models once llm_endpoint is set', () => {
+        expect(modelEndpoint({ llm_endpoint: '/e', llm_models: [{ endpoint: '/a', api_key: 'old' }] }))
+            .toEqual({ endpoint: '/e', apiKey: undefined });
+    });
+    it('is null with no endpoint', () => {
+        expect(modelEndpoint({})).toBeNull();
+        expect(modelEndpoint({ llm_models: [{ value: 'm' }] })).toBeNull();
+        expect(modelEndpoint()).toBeNull();
     });
 });
 
-describe('modelsFromTierList (#444)', () => {
-    const config = [
-        { value: 'kimi', label: 'Kimi K2', endpoint: '/api/llm', reasoning_toggle: true, temperature: 0.3 },
-        { value: 'gpt-paid', label: 'Paid model', endpoint: '/api/llm' },
-    ];
-
-    it('lists the proxy models in its order, with config settings matched by id', () => {
-        const { models } = modelsFromTierList(tierList(), config, { endpoint: '/api/llm' });
-        expect(models.map(m => m.value)).toEqual(['glm-5', 'deepseek-v4-flash', 'kimi']);
-        expect(models[2]).toMatchObject({ label: 'Kimi K2', reasoning_toggle: true, temperature: 0.3, endpoint: '/api/llm' });
-        expect(models[0]).toEqual({ value: 'glm-5', label: 'glm-5', endpoint: '/api/llm' });
-    });
-
-    it('drops configured models the tier does not list', () => {
-        const { models } = modelsFromTierList(tierList(), config, { endpoint: '/api/llm' });
-        expect(models.find(m => m.value === 'gpt-paid')).toBeUndefined();
-    });
-
-    it('starts on the proxy\'s default_model', () => {
-        expect(modelsFromTierList(tierList(), config, { endpoint: '/api/llm' }).selected).toBe('deepseek-v4-flash');
-    });
-
-    it('falls back to the flagged default, then the first model', () => {
-        expect(modelsFromTierList(tierList({ default_model: undefined }), [], { endpoint: '/e' }).selected).toBe('deepseek-v4-flash');
-        expect(modelsFromTierList(tierList({ default_model: 'gone', data: [{ id: 'a' }, { id: 'b' }] }), [], { endpoint: '/e' }).selected).toBe('a');
-    });
-
-    it('carries the fetching key, and never a stale per-model key', () => {
-        const withKey = modelsFromTierList(tierList(), [{ value: 'kimi', api_key: 'old' }], { endpoint: '/e', apiKey: 'k' });
-        expect(withKey.models.every(m => m.api_key === 'k')).toBe(true);
-        const noKey = modelsFromTierList(tierList(), [{ value: 'kimi', api_key: 'old' }], { endpoint: '/e' });
-        expect(noKey.models.some(m => 'api_key' in m)).toBe(false);
-    });
-
-    it('ignores a plain /models list with no tier, and empty or malformed lists', () => {
-        expect(modelsFromTierList({ data: [{ id: 'a' }] }, [], { endpoint: '/e' })).toBeNull();
-        expect(modelsFromTierList(tierList({ data: [] }), [], { endpoint: '/e' })).toBeNull();
-        expect(modelsFromTierList(tierList({ data: [{}, { id: 7 }] }), [], { endpoint: '/e' })).toBeNull();
-        expect(modelsFromTierList(null, [], { endpoint: '/e' })).toBeNull();
-    });
-
-    it('takes model settings from the proxy list, with the app\'s own settings winning (#461)', () => {
+describe('modelsFromTierList (#444, glen#542)', () => {
+    it('lists the proxy models in its order, with their settings from the list', () => {
         const list = tierList({ data: [
+            { id: 'glm-5' },
             { id: 'deepseek-v4-flash', default: true, settings: { label: 'NRP DeepSeek V4 Flash', temperature: 0.6, max_tokens: 4096 } },
-            { id: 'kimi', settings: { label: 'Proxy Kimi', temperature: 0.9, prompt_cache: true } },
-            { id: 'glm-5', settings: ['not', 'an', 'object'] },
+            { id: 'kimi', settings: { label: 'Kimi K2', reasoning_toggle: true, prompt_cache: true } },
+            { id: 'bad', settings: ['not', 'an', 'object'] },
             { id: 'odd', settings: null },
         ] });
-        const { models } = modelsFromTierList(list, config, { endpoint: '/api/llm' });
-        expect(models[0]).toEqual({ value: 'deepseek-v4-flash', label: 'NRP DeepSeek V4 Flash', temperature: 0.6, max_tokens: 4096, endpoint: '/api/llm' });
-        expect(models[1]).toMatchObject({ value: 'kimi', label: 'Kimi K2', temperature: 0.3, prompt_cache: true, reasoning_toggle: true });
-        expect(models[2]).toEqual({ value: 'glm-5', label: 'glm-5', endpoint: '/api/llm' });
-        expect(models[3]).toEqual({ value: 'odd', label: 'odd', endpoint: '/api/llm' });
+        const { models } = modelsFromTierList(list, { endpoint: '/api/llm' });
+        expect(models.map(m => m.value)).toEqual(['glm-5', 'deepseek-v4-flash', 'kimi', 'bad', 'odd']);
+        expect(models[0]).toEqual({ value: 'glm-5', label: 'glm-5', endpoint: '/api/llm' });
+        expect(models[1]).toEqual({ value: 'deepseek-v4-flash', label: 'NRP DeepSeek V4 Flash', temperature: 0.6, max_tokens: 4096, endpoint: '/api/llm' });
+        expect(models[2]).toMatchObject({ label: 'Kimi K2', reasoning_toggle: true, prompt_cache: true });
+        expect(models[3]).toEqual({ value: 'bad', label: 'bad', endpoint: '/api/llm' });
+        expect(models[4]).toEqual({ value: 'odd', label: 'odd', endpoint: '/api/llm' });
+    });
+
+    it('starts on the proxy\'s default_model, then the flagged default, then the first model', () => {
+        expect(modelsFromTierList(tierList(), { endpoint: '/e' }).selected).toBe('deepseek-v4-flash');
+        expect(modelsFromTierList(tierList({ default_model: undefined }), { endpoint: '/e' }).selected).toBe('deepseek-v4-flash');
+        expect(modelsFromTierList(tierList({ default_model: 'gone', data: [{ id: 'a' }, { id: 'b' }] }), { endpoint: '/e' }).selected).toBe('a');
+    });
+
+    it('carries the fetching key, or none', () => {
+        expect(modelsFromTierList(tierList(), { endpoint: '/e', apiKey: 'k' }).models.every(m => m.api_key === 'k')).toBe(true);
+        expect(modelsFromTierList(tierList(), { endpoint: '/e' }).models.some(m => 'api_key' in m)).toBe(false);
     });
 
     it('never takes an id, endpoint or key from the proxy settings', () => {
         const list = tierList({ data: [{ id: 'a', settings: { value: 'b', endpoint: 'https://evil', api_key: 'x' } }] });
-        const { models } = modelsFromTierList(list, [], { endpoint: '/e' });
-        expect(models[0]).toEqual({ value: 'a', label: 'a', endpoint: '/e' });
+        expect(modelsFromTierList(list, { endpoint: '/e' }).models[0]).toEqual({ value: 'a', label: 'a', endpoint: '/e' });
+    });
+
+    it('ignores a plain /models list with no tier, and empty or malformed lists', () => {
+        expect(modelsFromTierList({ data: [{ id: 'a' }] }, { endpoint: '/e' })).toBeNull();
+        expect(modelsFromTierList(tierList({ data: [] }), { endpoint: '/e' })).toBeNull();
+        expect(modelsFromTierList(tierList({ data: [{}, { id: 7 }] }), { endpoint: '/e' })).toBeNull();
+        expect(modelsFromTierList(null, { endpoint: '/e' })).toBeNull();
     });
 
     it('skips duplicate ids', () => {
-        const { models } = modelsFromTierList(tierList({ data: [{ id: 'a' }, { id: 'a' }] }), [], { endpoint: '/e' });
-        expect(models).toHaveLength(1);
+        expect(modelsFromTierList(tierList({ data: [{ id: 'a' }, { id: 'a' }] }), { endpoint: '/e' }).models).toHaveLength(1);
     });
 });
 
-describe('applyProxyModelList', () => {
-    it('replaces llm_models and llm_model from the tier list; the proxy default beats the app\'s llm_model', async () => {
-        const config = { llm_models: [{ value: 'kimi', endpoint: '/api/llm' }], llm_model: 'kimi' };
-        const tier = await applyProxyModelList(config, { fetchImpl: okFetch(tierList()) });
-        expect(tier).toBe('public');
+describe('applyProxyModelList (glen#542)', () => {
+    it('sets llm_models and llm_model from the list alone; the app\'s own names are ignored', async () => {
+        const config = { llm_endpoint: '/api/llm', llm_models: [{ value: 'kimi', label: 'App label', temperature: 0.1 }], llm_model: 'kimi' };
+        const f = okFetch(tierList());
+        expect(await applyProxyModelList(config, { fetchImpl: f })).toBe('public');
+        expect(f.mock.calls[0][0]).toBe('/api/llm/models');
+        expect(f.mock.calls[0][1].headers).toEqual({});
         expect(config.llm_models.map(m => m.value)).toEqual(['glm-5', 'deepseek-v4-flash', 'kimi']);
+        expect(config.llm_models[2]).toEqual({ value: 'kimi', label: 'kimi', endpoint: '/api/llm' });
         expect(config.llm_model).toBe('deepseek-v4-flash');
     });
 
-    it('leaves the config alone when the fetch fails or the endpoint is not the proxy', async () => {
-        const original = [{ value: 'm', endpoint: '/api/llm' }];
-        const a = { llm_models: [...original], llm_model: 'm' };
-        expect(await applyProxyModelList(a, { fetchImpl: async () => ({ ok: false }) })).toBeNull();
-        expect(a).toEqual({ llm_models: original, llm_model: 'm' });
-        const b = { llm_models: [...original] };
-        expect(await applyProxyModelList(b, { fetchImpl: okFetch({ data: [{ id: 'x' }] }) })).toBeNull();
-        expect(b.llm_models).toEqual(original);
+    it('sends llm_api_key when a host sets one', async () => {
+        const config = { llm_endpoint: 'https://proxy/v1', llm_api_key: 'k' };
+        const f = okFetch(tierList());
+        await applyProxyModelList(config, { fetchImpl: f });
+        expect(f.mock.calls[0][1].headers).toEqual({ Authorization: 'Bearer k' });
+        expect(config.llm_models.every(m => m.api_key === 'k')).toBe(true);
     });
 
-    it('does not fetch when models use different endpoints or none are set', async () => {
+    it('keeps an old-form config\'s app token as the bearer, on /models and on chat requests', async () => {
+        // bosl-high-seas-private, naturetrace and tpl-internal: nginx returns 403
+        // unless the bearer equals APP_TOKEN, today in llm_models[0].api_key.
+        const config = { llm_models: [{ value: 'old-name', endpoint: '/api/llm', api_key: 'APP_TOKEN' }] };
         const f = okFetch(tierList());
-        await applyProxyModelList({ llm_models: [{ value: 'a', endpoint: '/x' }, { value: 'b', endpoint: '/y' }] }, { fetchImpl: f });
-        await applyProxyModelList({}, { fetchImpl: f });
+        await applyProxyModelList(config, { fetchImpl: f });
+        expect(f.mock.calls[0][1].headers).toEqual({ Authorization: 'Bearer APP_TOKEN' });
+        expect(config.llm_models.every(m => m.api_key === 'APP_TOKEN')).toBe(true);
+
+        const agent = new Agent(config, { getToolsForLLM: () => [] });
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] }),
+        }));
+        await agent.processMessage('q');
+        const [url, opts] = global.fetch.mock.calls[0];
+        expect(url).toBe('/api/llm/chat/completions');
+        expect(opts.headers.Authorization).toBe('Bearer APP_TOKEN');
+        expect(JSON.parse(opts.body).model).toBe('deepseek-v4-flash');
+    });
+
+    it('sends no Authorization header on chat requests when there is no key', async () => {
+        const config = { llm_endpoint: '/api/llm' };
+        await applyProxyModelList(config, { fetchImpl: okFetch(tierList()) });
+        const agent = new Agent(config, { getToolsForLLM: () => [] });
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] }),
+        }));
+        await agent.processMessage('q');
+        expect(global.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    });
+
+    it('takes the tier\'s transcription model, with the same endpoint and key (open-llm-proxy#210)', async () => {
+        const withKey = { llm_endpoint: '/api/llm', llm_api_key: 'k' };
+        await applyProxyModelList(withKey, { fetchImpl: okFetch(tierList({ transcription_model: 'parakeet' })) });
+        expect(withKey.transcription_model).toEqual({ value: 'parakeet', endpoint: '/api/llm', api_key: 'k' });
+        expect(withKey.llm_models.some(m => m.value === 'parakeet')).toBe(false);
+
+        const noKey = { llm_endpoint: '/api/llm', transcription_model: { value: 'old' } };
+        await applyProxyModelList(noKey, { fetchImpl: okFetch(tierList({ transcription_model: 'gemma-small' })) });
+        expect(noKey.transcription_model).toEqual({ value: 'gemma-small', endpoint: '/api/llm' });
+    });
+
+    it('leaves the config\'s transcription model as it is when the list names none', async () => {
+        const config = { llm_endpoint: '/api/llm', transcription_model: { value: 'whisper', endpoint: '/x', api_key: 'y' } };
+        await applyProxyModelList(config, { fetchImpl: okFetch(tierList()) });
+        expect(config.transcription_model).toEqual({ value: 'whisper', endpoint: '/x', api_key: 'y' });
+        const none = { llm_endpoint: '/api/llm' };
+        await applyProxyModelList(none, { fetchImpl: okFetch(tierList()) });
+        expect('transcription_model' in none).toBe(false);
+    });
+
+    it('throws ModelListError, leaving the config alone, when the service cannot be reached or answers wrongly', async () => {
+        const config = { llm_endpoint: '/api/llm', llm_models: [{ value: 'm', endpoint: '/api/llm' }], llm_model: 'm' };
+        const before = structuredClone(config);
+        for (const fetchImpl of [async () => ({ ok: false }), async () => { throw new Error('down'); }, okFetch({ data: [{ id: 'x' }] })]) {
+            const err = await applyProxyModelList(config, { fetchImpl }).catch(e => e);
+            expect(err).toBeInstanceOf(ModelListError);
+            expect(err.code).toBe('model-list-unavailable');
+        }
+        expect(config).toEqual(before);
+    });
+
+    it('throws ModelListError without fetching when no endpoint is configured', async () => {
+        const f = okFetch(tierList());
+        await expect(applyProxyModelList({}, { fetchImpl: f })).rejects.toBeInstanceOf(ModelListError);
         expect(f).not.toHaveBeenCalled();
     });
 });

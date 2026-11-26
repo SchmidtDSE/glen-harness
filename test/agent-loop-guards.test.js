@@ -120,3 +120,16 @@ describe('empty reply (glen-harness#25)', () => {
         expect(result.response).toMatch(/trouble generating a response/);
     });
 });
+
+describe('no model configured (glen#542)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('refuses with a clear error instead of sending a request to a made-up endpoint', async () => {
+        global.fetch = vi.fn();
+        const agent = new Agent({}, { getToolsForLLM: () => [] });
+        expect(agent.getModelConfig()).toBeNull();
+        await expect(agent.processMessage('q')).rejects.toThrow(/model service could not be reached/);
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(agent.messages).toEqual([]);
+    });
+});

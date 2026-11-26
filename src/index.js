@@ -21,6 +21,8 @@ export {
     loadUserSettings,
     fetchModelIds,
     modelsFromTierList,
+    modelEndpoint,
+    ModelListError,
     STORAGE_KEY_API,
     STORAGE_KEY_ENDPOINT,
     STORAGE_KEY_MODEL,

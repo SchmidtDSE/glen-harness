@@ -66,7 +66,9 @@ export class Transcriber {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.modelCfg.api_key || 'EMPTY'}`,
+                // No key, no header: a deployment behind basic auth keeps its
+                // saved login (glen#420), as for chat requests.
+                ...(this.modelCfg.api_key ? { Authorization: `Bearer ${this.modelCfg.api_key}` } : {}),
             },
             body: JSON.stringify(payload),
             signal: opts.signal ?? AbortSignal.timeout(15_000),
