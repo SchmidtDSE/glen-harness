@@ -77,16 +77,25 @@ const ui = new ChatUI(agent, config, buildChatPanel(document.querySelector('#cha
 ui.addElement(cardElement);   // show a table or chart a tool made
 ```
 
-`ChatUI` takes the same config as geo-agent (`llm_models`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. The export asks the chart renderer for each chart's figure (`exportFigure(id)`) and, if it has one, `exportQuery(id)`: for a chart that follows the host's settings, its SQL with the current values filled in and those settings as `{ label, value }` pairs, so the report's code and figure agree. A host can override `exportRow()` to put the export button in a row of its own, `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page, and `appVersion()` to name its own build in the export's "Generated with GLEN" line instead of the harness's tag. `addResultAction(fn)` adds controls under tool results: `fn` gets each result as it is shown (`name`, `args`, `success`, `result`, `sqlQuery`) and returns an element, a list of them, or nothing; glen uses it for the buttons that download a query's rows. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
+`ChatUI` takes the same config as geo-agent (`llm_models` as set by `applyProxyModelList`, `welcome`, `auto_approve`, `export`, `links`, `transcription_model`) and the same optional map and chart arguments, which only the export uses. The export asks the chart renderer for each chart's figure (`exportFigure(id)`) and, if it has one, `exportQuery(id)`: for a chart that follows the host's settings, its SQL with the current values filled in and those settings as `{ label, value }` pairs, so the report's code and figure agree. A host can override `exportRow()` to put the export button in a row of its own, `footerLinks(links)` to add text links to the chat footer, as glen does for its data sources page, and `appVersion()` to name its own build in the export's "Generated with GLEN" line instead of the harness's tag. `addResultAction(fn)` adds controls under tool results: `fn` gets each result as it is shown (`name`, `args`, `success`, `result`, `sqlQuery`) and returns an element, a list of them, or nothing; glen uses it for the buttons that download a query's rows. The user-provided key mode stores the key, endpoint and model id under geo-agent's `localStorage` names, and a visitor's MCP token beside them, so settings saved in one GLEN app work in the others on the same site.
 
 ## Model list
 
-When every model in `llm_models` uses one endpoint, `applyProxyModelList(config)` asks that endpoint for `GET <endpoint>/models`. If the answer is open-llm-proxy's tier list (it has a `tier`), the function replaces `llm_models` with the models the app's key may use and sets `llm_model` to the proxy's default for that tier. The app's own entries then supply only per-model settings (label, `reasoning_toggle`, sampling), matched by id, and an entry the proxy does not list is left out, since the proxy would refuse it with a 403. If the request fails or the endpoint is not the proxy, the config is left as it was. A host calls it before creating the `Agent`:
+The model service's `GET <llm_endpoint>/models` is the only source of the model list, the default model and each model's settings (SchmidtDSE/glen#542). Apps name no models. `applyProxyModelList(config)` fetches that list and, when it is open-llm-proxy's tier list (it has a `tier`), sets `llm_models` from its entries and `llm_model` to the tier's default. Each model's label, `reasoning_toggle`, sampling and other settings come from the entry's `settings`, and nothing in the app's config overrides them. A host with no server in front to add the key, such as a headless runner, sets `llm_api_key`; a browser app leaves it unset and sends no `Authorization` header. While apps move to `llm_endpoint`, a config with only `llm_models` uses the first entry's endpoint and ignores the rest.
+
+When there is no endpoint, the service cannot be reached, or the answer is not a tier list, `applyProxyModelList` throws a `ModelListError` (`code: 'model-list-unavailable'`) and leaves the config as it was. There is no fallback to a stale list. The host shows the error, or, in the user-provided key mode, offers the user's own models. An `Agent` with no models refuses to send a request and says the model service could not be reached. A host calls it before creating the `Agent`:
 
 ```js
-await applyProxyModelList(config);   // resolves to the tier name, or null
+try {
+    await applyProxyModelList(config);   // resolves to the tier name
+} catch (err) {
+    if (err.code !== 'model-list-unavailable') throw err;
+    // show err.message, or fall back to the user's own key
+}
 const agent = new Agent(config, registry);
 ```
+
+`Agent` itself still takes an explicit `llm_models` array, as the benchmark runner and the user-provided key mode build one directly.
 
 In the user-provided key mode (`llm.user_provided`), `buildUserModels(config.llm, loadUserSettings())` builds the list from the key, endpoint and optional model id the user saved in the chat's settings panel. A model id the user names goes first and starts selected; the panel suggests the ids the endpoint's `/models` lists. These are SchmidtDSE/glen#444 and glen#443.
 

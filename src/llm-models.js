@@ -3,13 +3,13 @@
  *
  * Issue numbers refer to SchmidtDSE/glen.
  *
- * Two sources besides the app's own `llm_models`:
+ * Two sources:
  *
- * - The open-llm-proxy's tier list (#444). Each app's proxy key carries a tier
- *   (public or private), and `GET <endpoint>/models` returns that tier's
- *   models with a `tier` and `default_model`. A model outside the tier gets a
- *   403, so when the proxy answers, its list decides what the picker shows and
- *   `llm_models` only supplies per-model settings, matched by id.
+ * - The open-llm-proxy's tier list (#444, #542). Each app's proxy key carries
+ *   a tier, and `GET <llm_endpoint>/models` returns that tier's models with a
+ *   `tier`, a `default_model` and each model's settings. It is the only source
+ *   of the list, the default and the settings: apps name no models, and when
+ *   the list cannot be fetched there is no fallback.
  * - A bring-your-own-key user's own model id (#443), saved next to their key.
  *   Their key pays, so they may name any model their endpoint serves; the
  *   app's `llm.models` stay as suggestions.
@@ -36,8 +36,7 @@ export function modelsUrl(endpoint) {
 
 /**
  * Fetch an endpoint's model list. Resolves to the parsed body, or null on any
- * failure (network, HTTP error, bad JSON, no `data` array, timeout), so a
- * caller can always fall back to its configured list.
+ * failure (network, HTTP error, bad JSON, no `data` array, timeout).
  */
 export async function fetchModelList(endpoint, { apiKey, fetchImpl = globalThis.fetch, timeoutMs = 8000 } = {}) {
     if (!endpoint || typeof fetchImpl !== 'function') return null;
@@ -59,48 +58,58 @@ export async function fetchModelList(endpoint, { apiKey, fetchImpl = globalThis.
 }
 
 /**
- * The one endpoint (and key) every configured model uses, or null when the
- * models disagree. Only a single shared endpoint can be asked for "the" list.
+ * Thrown by applyProxyModelList when no model list can be had: no endpoint is
+ * configured, the model service cannot be reached, or it answers with
+ * something that is not open-llm-proxy's tier list. There is no fallback to a
+ * list in the app's config (glen#542); the host shows the error, or offers a
+ * bring-your-own-key user their own models.
  */
-export function sharedEndpoint(models) {
-    if (!Array.isArray(models) || models.length === 0) return null;
-    const { endpoint, api_key } = models[0];
-    if (!endpoint) return null;
-    const same = models.every(m => m.endpoint === endpoint && (m.api_key || '') === (api_key || ''));
-    return same ? { endpoint, apiKey: api_key } : null;
+export class ModelListError extends Error {
+    constructor(message, options) {
+        super(message, options);
+        this.name = 'ModelListError';
+        this.code = 'model-list-unavailable';
+    }
 }
 
 /**
- * Build the picker from the proxy's tier list.
+ * The model service's endpoint and key. `llm_endpoint` names it. During the
+ * move to it, a config with only `llm_models` uses the first entry's
+ * endpoint; the entries' names and settings are ignored (glen#542). The key,
+ * `llm_api_key`, is for hosts with no server in front to add one, such as a
+ * headless runner; a browser app leaves it unset and sends no Authorization
+ * header (glen#420).
+ */
+export function modelEndpoint(config = {}) {
+    const endpoint = config.llm_endpoint || config.llm_models?.[0]?.endpoint || null;
+    return endpoint ? { endpoint, apiKey: config.llm_api_key || undefined } : null;
+}
+
+/**
+ * Build the picker from the proxy's tier list. The list is the only source:
+ * each model's settings (label, reasoning_toggle, sampling, …) come from its
+ * entry's `settings` (open-llm-proxy#189), and nothing in the app's config
+ * overrides them (glen#542).
  *
- * @param {Object} list  - `{tier, default_model, data: [{id, ...}]}` from the proxy
- * @param {Array} configModels - the app's `llm_models`, used for per-model
- *   settings (label, reasoning_toggle, sampling, …) matched by id; entries the
- *   proxy does not list are dropped. A list entry's own `settings` object
- *   (open-llm-proxy#189, same names) fills in whatever the app leaves unset.
+ * @param {Object} list  - `{tier, default_model, data: [{id, settings, ...}]}` from the proxy
  * @param {Object} opts
  * @param {string} opts.endpoint - the endpoint the list came from
  * @param {string} [opts.apiKey]  - the key used to fetch it, if any
  * @returns {{models: Array, selected: string}|null} null when the response is
  *   not a proxy tier list or lists nothing.
  */
-export function modelsFromTierList(list, configModels, { endpoint, apiKey } = {}) {
-    // Only the proxy's tier list replaces the config. A plain OpenAI-style
-    // /models (vLLM, OpenRouter) has no `tier` and may list hundreds of models.
+export function modelsFromTierList(list, { endpoint, apiKey } = {}) {
+    // Only the proxy's tier list is accepted. A plain OpenAI-style /models
+    // (vLLM, OpenRouter) has no `tier` and may list hundreds of models.
     if (!list || typeof list.tier !== 'string' || !Array.isArray(list.data)) return null;
-    const byId = new Map((configModels || []).map(m => [m.value, m]));
     const models = [];
     const seen = new Set();
     for (const entry of list.data) {
         const id = entry?.id;
         if (typeof id !== 'string' || !id || seen.has(id)) continue;
         seen.add(id);
-        // The proxy sets each model's client settings centrally
-        // (open-llm-proxy#189); the app's own llm_models entry wins over them.
-        const proxySettings = entry.settings && typeof entry.settings === 'object' && !Array.isArray(entry.settings)
+        const settings = entry.settings && typeof entry.settings === 'object' && !Array.isArray(entry.settings)
             ? entry.settings : {};
-        const appSettings = byId.get(id) || {};
-        const settings = { ...proxySettings, ...appSettings };
         const model = { ...settings, value: id, label: settings.label || id, endpoint };
         if (apiKey) model.api_key = apiKey;
         else delete model.api_key;
@@ -109,27 +118,29 @@ export function modelsFromTierList(list, configModels, { endpoint, apiKey } = {}
     if (models.length === 0) return null;
     const ids = new Set(models.map(m => m.value));
     const flagged = list.data.find(e => e?.default === true)?.id;
-    // The proxy owns one default per tier, so the app's llm_model does not
-    // override it; llm_model applies only when the list cannot be fetched.
     const selected = [list.default_model, flagged].find(id => ids.has(id)) || models[0].value;
     return { models, selected };
 }
 
 /**
- * Ask the proxy for this app's tier list and apply it to `config` in place
- * (`llm_models`, `llm_model`). Leaves the config untouched when the models do
- * not share one endpoint, or the endpoint is not the proxy, or the fetch
- * fails. Returns the tier name when applied, else null.
+ * Ask the model service for this app's tier list and apply it to `config` in
+ * place (`llm_models`, `llm_model`). Returns the tier name. Throws a
+ * ModelListError when there is no endpoint, the fetch fails, or the answer is
+ * not a tier list; the config is then left as it was.
  */
 export async function applyProxyModelList(config, { fetchImpl } = {}) {
-    const shared = sharedEndpoint(config.llm_models);
-    if (!shared) return null;
-    const list = await fetchModelList(shared.endpoint, { apiKey: shared.apiKey, fetchImpl });
-    const result = modelsFromTierList(list, config.llm_models, {
-        endpoint: shared.endpoint,
-        apiKey: shared.apiKey,
-    });
-    if (!result) return null;
+    const service = modelEndpoint(config);
+    if (!service) {
+        throw new ModelListError('No model service is configured (llm_endpoint).');
+    }
+    const list = await fetchModelList(service.endpoint, { apiKey: service.apiKey, fetchImpl });
+    if (!list) {
+        throw new ModelListError(`The model service at ${service.endpoint} could not be reached.`);
+    }
+    const result = modelsFromTierList(list, service);
+    if (!result) {
+        throw new ModelListError(`The model service at ${service.endpoint} did not return a model list for this app.`);
+    }
     config.llm_models = result.models;
     config.llm_model = result.selected;
     return list.tier;

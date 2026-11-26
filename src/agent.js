@@ -82,7 +82,7 @@ export class Agent {
         this.toolRegistry = toolRegistry;
         this.systemPrompt = '';
         this.messages = [];
-        this.selectedModel = config.llm_model || config.llm_models?.[0]?.value || 'default';
+        this.selectedModel = config.llm_model || config.llm_models?.[0]?.value || null;
         // Runtime override for model thinking/reasoning, set by the host UI's toggle.
         // null = no override (fall back to config default, else omit → model default);
         // true/false = user asked for reasoning on/off for subsequent turns. Reset to
@@ -135,15 +135,13 @@ export class Agent {
     }
 
     /**
-     * Get the config for the currently selected model.
+     * Get the config for the currently selected model: the entry in
+     * `llm_models` whose `value` matches, else the first entry, else null when
+     * no model is configured.
      */
     getModelConfig() {
         const found = this.config.llm_models?.find(m => m.value === this.selectedModel);
-        return found || this.config.llm_models?.[0] || {
-            value: this.selectedModel,
-            endpoint: 'https://llm-proxy.nrp-nautilus.io/v1',
-            api_key: 'EMPTY'
-        };
+        return found || this.config.llm_models?.[0] || null;
     }
 
     /**
@@ -193,6 +191,13 @@ export class Agent {
 
         const tools = this.toolRegistry.getToolsForLLM();
         const modelConfig = this.getModelConfig();
+        if (!modelConfig?.endpoint) {
+            // No model list (the model service could not be reached, or a
+            // bring-your-own-key user has not saved a key yet). Say so rather
+            // than send a request to a made-up endpoint (glen#542).
+            throw new Error('No model is available: the model service could not be reached. '
+                + 'Reload the page to try again.');
+        }
 
         const opener = { role: 'user', content: userMessage };
         this.messages.push(opener);
