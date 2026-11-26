@@ -133,3 +133,71 @@ describe('no model configured (glen#542)', () => {
         expect(agent.messages).toEqual([]);
     });
 });
+
+describe('final answer that announces a check it never ran (glen-harness#26)', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const agent = () => makeAgent();
+
+    it('finds announcements', () => {
+        const a = agent();
+        expect(a.announcedCheck('I have the answer. Let me also verify there\'s nothing closer in a neighboring h0 partition.'))
+            .toBe('Let me also verify there\'s nothing closer in a neighboring h0 partition.');
+        expect(a.announcedCheck('The total is 26.5M acres.\n\nI\'ll now run a query for the GAP 2 share.')).toMatch(/^I'll now run/);
+        expect(a.announcedCheck('Next, I\'ll check the 2023 data.')).toBe('Next, I\'ll check the 2023 data.');
+        expect(a.announcedCheck('Let me double-check the denominator.')).toBe('Let me double-check the denominator.');
+    });
+
+    it('leaves offers, questions, in-place arithmetic, past tense and code alone', () => {
+        const a = agent();
+        for (const text of [
+            'Want me to check the neighboring partitions?',
+            'Should I run the same query for 2023?',
+            'If you\'d like, I\'ll run the same query for 2023.',
+            'I can verify this against the GFW totals.',
+            'Let me know if you want a breakdown by county.',
+            'Say the word and I\'ll run that.',
+            'Blue oak or coast live oak woodland — say which and I\'ll run it.',
+            'If you meant the Namibian site instead, let me know and I\'ll re-frame.',
+            'The map is running headless in this session, so I\'ll report the numbers directly.',
+            'Let me calculate: 26.5 / 101.5 = 26.1%.',
+            'Let me put the two figures together: 17.7M + 8.7M = 26.5M.',
+            'I checked the schema and ran one query.',
+            'The answer is 26.5 million acres.\n\n```sql\n-- let me check\nSELECT 1\n```',
+            '> Let me verify this, the user wrote.',
+            '',
+        ]) expect(a.announcedCheck(text), text).toBeNull();
+    });
+
+    it('asks once, then runs the check the model announced', async () => {
+        const execute = vi.fn(async () => ({ success: true, result: 'nearest: 156.3 km' }));
+        const sent = mockLLM(
+            call('c1', 'query', { sql_query: 'SELECT 1' }),
+            text('I have the answer: 260 km. Let me also verify there is nothing closer in a neighboring partition.'),
+            call('c2', 'query', { sql_query: 'SELECT 2' }),
+            text('The nearest fishing was 156.3 km away.'),
+        );
+        const a = makeAgent(execute);
+
+        const result = await a.processMessage('How close did fishing come to Jarvis Island?');
+
+        expect(result.response).toBe('The nearest fishing was 156.3 km away.');
+        expect(execute).toHaveBeenCalledTimes(2);
+        const prompt = sent[2].messages.at(-1);
+        expect(prompt.role).toBe('user');
+        expect(prompt.content).toContain('Let me also verify there is nothing closer');
+        // Neither the announcing reply nor the prompt stays in history.
+        expect(a.messages.some(m => /260 km|called no tool/.test(m.content ?? ''))).toBe(false);
+        expect(a.messages.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
+    });
+
+    it('accepts the second reply as final, even if it announces again', async () => {
+        mockLLM(
+            text('Let me verify that first.'),
+            text('Let me verify that again.'),
+        );
+        const a = makeAgent();
+        const result = await a.processMessage('q');
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        expect(result.response).toBe('Let me verify that again.');
+    });
+});
