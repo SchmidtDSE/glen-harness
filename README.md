@@ -25,11 +25,11 @@ The harness in `src/` has no DOM code and no dependencies beyond the vendored MC
 
 ### Tool-use loop
 
-`processMessage` sends the system prompt, the last 12 messages and the tool list to the model. When the reply contains tool calls, the agent runs them, adds the results to the conversation and calls the model again. It repeats until the model answers in text. Local tools always run without asking. Remote tools run once the host approves them through `onToolProposal`, or at once when auto-approve is on, which is the default. Each tool result is cut to 16,000 characters before it enters the conversation, so a large query result cannot fill the context window. `abort()` stops the turn at its next await, including during the model request.
+`processMessage` sends the system prompt, the conversation so far and the tool list to the model. When the reply contains tool calls, the agent runs them, adds the results to the conversation and calls the model again. It repeats until the model answers in text. Local tools always run without asking. Remote tools run once the host approves them through `onToolProposal`, or at once when auto-approve is on, which is the default. Each tool result is cut to 16,000 characters before it enters the conversation, so a large query result cannot fill the context window. When a turn ends, it stays in the conversation in a shorter form, so a follow-up question can see which numbers were computed and how. That form keeps the tool calls with their arguments, the first 1,000 characters of each result and the text the model wrote, and leaves out reasoning and the harness's own re-prompts. A turn is shortened once and not changed afterwards, so later requests keep the same prefix for the provider's prompt cache. Once the conversation passes 60,000 characters (`history_budget_chars`, per model or globally), the oldest turns are dropped, a few at a time, never splitting a tool call from its result. `abort()` stops the turn at its next await, including during the model request.
 
 ### Turn limits
 
-The agent pauses at a checkpoint after a set number of rounds that call remote tools: 15 with auto-approve (`max_tool_calls`) and 100 without (`max_tool_calls_manual`). At a checkpoint it asks the model for a progress summary without tools, keeps the turn, and resumes it when the user sends the next message, such as Continue. Rounds that call only local tools do not count toward that limit, so the same number of local-only rounds in a row also ends in a checkpoint; a model once looped on a failing local tool indefinitely ([glen#243](https://github.com/SchmidtDSE/glen/issues/243)). When every call in a round fails exactly as the round before did, the agent tells the model once that repeating the call will not help, and checkpoints if it repeats again ([glen#313](https://github.com/SchmidtDSE/glen/issues/313)). When a reply stops at the output limit, none of its tool calls run, because the last call's arguments may be incomplete; a text answer is shown with a note that it was cut off, and otherwise the turn ends with an error ([glen#387](https://github.com/SchmidtDSE/glen/issues/387)).
+The agent pauses at a checkpoint after a set number of rounds that call remote tools: 15 with auto-approve (`max_tool_calls`) and 100 without (`max_tool_calls_manual`). At a checkpoint it asks the model for a progress summary without tools, keeps the turn, and resumes it when the user sends the next message, such as Continue. Rounds that call only local tools do not count toward that limit, so the same number of local-only rounds in a row also ends in a checkpoint; a model once looped on a failing local tool indefinitely ([glen#243](https://github.com/SchmidtDSE/glen/issues/243)). When every call in a round fails exactly as the round before did, the agent tells the model once that repeating the call will not help, and checkpoints if it repeats again ([glen#313](https://github.com/SchmidtDSE/glen/issues/313)). When a round repeats exactly a round that succeeded, the calls are not run again: the model is told the result is already in its context, and the agent checkpoints if it repeats once more ([#19](https://github.com/SchmidtDSE/glen-harness/issues/19)). A reply with no text and no tool call is asked for again once before the turn ends with a fallback message ([#25](https://github.com/SchmidtDSE/glen-harness/issues/25)). When a reply stops at the output limit, none of its tool calls run, because the last call's arguments may be incomplete; a text answer is shown with a note that it was cut off, and otherwise the turn ends with an error ([glen#387](https://github.com/SchmidtDSE/glen/issues/387)).
 
 ### Request shaping
 
@@ -64,7 +64,7 @@ The reasons for keeping this code are recorded in glen's [tool-call parsing desi
 | `ui/chat-docked.css` | Styles for the chat in a page column (geo-agent's sidebar look), coloured by CSS tokens a host can override, such as `--control-bg`. |
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.7.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.8.0';
 const [{ Agent, ToolRegistry }, { ChatUI, buildChatPanel, loadChatDeps }] =
     await Promise.all([import(`${H}/src/index.js`), import(`${H}/ui/index.js`)]);
 
@@ -118,7 +118,7 @@ With `authFailed` the chat says the data server needs a token and opens the pane
 An app whose tools all run in the page imports the `./core` entry (`src/core.js`) and the chat module:
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.7.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.8.0';
 const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
@@ -130,10 +130,10 @@ These load nine files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `s
 In a browser, import from jsDelivr pinned to a tag. There is no build step.
 
 ```js
-import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.7.0/src/index.js';
+import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.8.0/src/index.js';
 ```
 
-In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.7.0`), as the package is not yet on npm:
+In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.8.0`), as the package is not yet on npm:
 
 ```js
 import { Agent, ToolRegistry, MCPClient } from 'glen-harness';

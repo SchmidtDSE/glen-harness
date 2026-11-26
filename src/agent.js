@@ -30,6 +30,44 @@ const HARNESS_VERSION = import.meta.url.match(/glen-harness@([^/]+)/)?.[1] || 'd
 // history.
 const RESPONSE_END = new WeakMap();
 
+// The user message that opened each turn, so history is cut at turn
+// boundaries rather than at the harness's in-turn nudges or a host's notes,
+// which are also user messages.
+const TURN_OPENERS = new WeakSet();
+
+// Tool calls recovered from a reply's text (#288, #295), keyed by that reply.
+// Within its turn the reply goes upstream as the model wrote it. When the
+// turn is kept as history, the reply is rewritten with these calls as its
+// `tool_calls`, so the tool results after it answer a call a strict provider
+// can see.
+const RECOVERED_CALLS = new WeakMap();
+
+// Messages the harness adds within a turn to steer the model (a re-prompt
+// after an unparseable call or a repeated failure, the checkpoint request).
+// They are left out when the turn is kept as history.
+const HARNESS_PROMPTS = new WeakSet();
+const harnessPrompt = (content) => {
+    const m = { role: 'user', content };
+    HARNESS_PROMPTS.add(m);
+    return m;
+};
+
+// A finished turn is kept as history in a shorter form, once, when it ends
+// (glen-harness#21): its tool calls with their arguments, each result cut to
+// HISTORY_RESULT_CHARS, and the text the model wrote. Arguments longer than
+// HISTORY_ARGS_CHARS, such as a drawn polygon, are replaced with a note.
+const HISTORY_RESULT_CHARS = 1000;
+const HISTORY_ARGS_CHARS = 4000;
+
+// Size of the history sent with each turn, in characters of message JSON.
+// Past it the oldest turns are dropped. Override with `history_budget_chars`,
+// per model or globally.
+const HISTORY_BUDGET_CHARS = 60000;
+// History over budget is brought down to this share of it, so turns are
+// dropped now and then, not on every turn, which would change the cached
+// prefix each time.
+const HISTORY_TARGET_SHARE = 0.75;
+
 export class Agent {
     /**
      * @param {Object} config
@@ -153,26 +191,39 @@ export class Agent {
         abortPromise.catch(() => {});
         const withAbort = (p) => Promise.race([p, abortPromise]);
 
-        this.messages.push({ role: 'user', content: userMessage });
+        const tools = this.toolRegistry.getToolsForLLM();
+        const modelConfig = this.getModelConfig();
 
-        let turnMessages;
+        const opener = { role: 'user', content: userMessage };
+        this.messages.push(opener);
+
+        // The turn's working messages, where in them the turn begins, and the
+        // entries it has put into this.messages so far. When the turn ends,
+        // those entries are replaced with its whole trace (_keepTurn).
+        let turn;
         if (resuming) {
             // Resume the paused turn: reuse its full tool-call history and append
             // the new user message (a canned "continue" or a steering instruction).
             // Do NOT rebuild from this.messages — that would discard the in-flight
             // work and restart from scratch.
             this.suspendedTurn = null;
-            turnMessages = resuming.turnMessages;
-            turnMessages.push({ role: 'user', content: userMessage });
+            turn = {
+                turnMessages: resuming.turnMessages,
+                sqlQueries,
+                turnStart: resuming.turnStart,
+                ownEntries: [...(resuming.ownEntries ?? []), opener],
+            };
+            turn.turnMessages.push(opener);
         } else {
-            turnMessages = [
+            TURN_OPENERS.add(opener);
+            this._fitHistory(modelConfig);
+            const turnMessages = [
                 { role: 'system', content: this.systemPrompt },
-                ...this.messages.slice(-12),
+                ...this.messages,
             ];
+            turn = { turnMessages, sqlQueries, turnStart: turnMessages.length - 1, ownEntries: [opener] };
         }
-
-        const tools = this.toolRegistry.getToolsForLLM();
-        const modelConfig = this.getModelConfig();
+        const { turnMessages } = turn;
         let endpoint = modelConfig.endpoint;
         if (!endpoint.endsWith('/chat/completions')) {
             endpoint = endpoint.replace(/\/$/, '') + '/chat/completions';
@@ -199,19 +250,31 @@ export class Agent {
         // the last all-failed round and how many times it has repeated since.
         let repeatedFailureStreak = 0;
         let lastFailedRoundSig = null;
+        // Repeated-success short-circuit (glen-harness#19). A model that
+        // re-issues the byte-identical call(s) that just succeeded is not making
+        // progress either: the result is already in its context. The first
+        // repeat is not run; the model is told to use the earlier result. A
+        // second repeat checkpoints.
+        let lastSucceededRoundSig = null;
+        let repeatedSuccessStreak = 0;
+        // Empty-reply retries this turn (glen-harness#25): a reply with no text
+        // and no tool call, usually reasoning that broke off, is asked for again
+        // once before the turn gives up.
+        let emptyRetries = 0;
+        const MAX_EMPTY_RETRIES = 1;
 
         try {
         while (true) {
             const threshold = this.activeThreshold();
             if (threshold && iterations >= threshold) {
-                return await this._checkpoint(endpoint, modelConfig, turnMessages, sqlQueries, iterations);
+                return await this._checkpoint(endpoint, modelConfig, turn, iterations);
             }
             // Runaway guard: a turn that does `threshold` local-only rounds in a row
             // (with no remote round and no final answer) is stuck looping, not making
             // progress. Checkpoint it like any other cap. A remote round resets the
             // streak, so legitimately tool-heavy turns are unaffected.
             if (threshold && localOnlyStreak >= threshold) {
-                return await this._checkpoint(endpoint, modelConfig, turnMessages, sqlQueries, iterations);
+                return await this._checkpoint(endpoint, modelConfig, turn, iterations);
             }
             this.onThinkingStart();
 
@@ -237,7 +300,7 @@ export class Agent {
             // response, open-llm-proxy#150) — so none run. Text that did arrive
             // is still shown, marked as cut off.
             if (this._hitOutputLimit(message, modelConfig)) {
-                return this._lengthLimited(message, modelConfig, sqlQueries);
+                return this._lengthLimited(message, modelConfig, turn);
             }
 
             // Canonicalize native tool-call arguments before they enter history
@@ -258,6 +321,25 @@ export class Agent {
                 // over a long turn shouldn't accumulate toward the recovery cap.
                 parseRetries = 0;
                 const calls = toolCalls.length > 0 ? toolCalls : this.syntheticToolCalls(embeddedCalls);
+                if (toolCalls.length === 0) RECOVERED_CALLS.set(message, calls);
+
+                const roundSig = JSON.stringify(calls.map(c => [c.function?.name, c.function?.arguments]));
+                repeatedSuccessStreak = roundSig === lastSucceededRoundSig ? repeatedSuccessStreak + 1 : 0;
+                if (repeatedSuccessStreak === 1) {
+                    for (const tc of calls) {
+                        turnMessages.push({
+                            role: 'tool',
+                            tool_call_id: tc.id,
+                            content: `You already called ${tc.function?.name} with these arguments, and the `
+                                + 'result is in the earlier tool message. It was not run again. Use that '
+                                + 'result and continue, or answer the user.',
+                        });
+                    }
+                    continue;
+                }
+                if (repeatedSuccessStreak >= 2) {
+                    return await this._checkpoint(endpoint, modelConfig, turn, iterations);
+                }
 
                 // Classify: are all calls local (auto-approve) or mixed?
                 const allLocal = calls.every(tc => this.toolRegistry.isLocal(tc.function.name));
@@ -340,25 +422,24 @@ export class Agent {
                 // the identical call(s) that just failed, and every call failed
                 // again, the model is stuck. Steer it once; if it still repeats,
                 // checkpoint instead of looping to the localOnlyStreak cap.
-                const roundSig = JSON.stringify(calls.map(c => [c.function?.name, c.function?.arguments]));
                 const roundFailed = results.length > 0 && results.every(r => this._isFailedResult(r));
                 repeatedFailureStreak = (roundFailed && roundSig === lastFailedRoundSig)
                     ? repeatedFailureStreak + 1
                     : 0;
                 lastFailedRoundSig = roundFailed ? roundSig : null;
+                lastSucceededRoundSig = roundFailed ? null : roundSig;
                 if (repeatedFailureStreak === 1) {
                     const errText = (results.find(r => this._isFailedResult(r))?.result || '').slice(0, 300);
-                    turnMessages.push({
-                        role: 'user',
-                        content: 'That tool call just failed with the same error as the previous attempt'
+                    turnMessages.push(harnessPrompt(
+                        'That tool call just failed with the same error as the previous attempt'
                             + (errText ? `:\n${errText}\n` : '. ')
                             + 'Repeating the identical call will not help. Call it differently, use a '
                             + 'different tool, or reply to the user in plain text explaining the problem.',
-                    });
+                    ));
                     continue;
                 }
                 if (repeatedFailureStreak >= 2) {
-                    return await this._checkpoint(endpoint, modelConfig, turnMessages, sqlQueries, iterations);
+                    return await this._checkpoint(endpoint, modelConfig, turn, iterations);
                 }
 
                 // Continue loop — LLM will see the results
@@ -376,17 +457,27 @@ export class Agent {
             // so a model that can't recover degrades to its text instead of looping.
             if (parseRetries < MAX_PARSE_RETRIES && this.looksLikeAttemptedToolCall(content)) {
                 parseRetries++;
-                turnMessages.push({
-                    role: 'user',
-                    content: 'That looked like a tool call but could not be parsed. Re-emit it as a single '
+                turnMessages.push(harnessPrompt(
+                    'That looked like a tool call but could not be parsed. Re-emit it as a single '
                         + 'well-formed call: <tool_call>{"name": "<tool_name>", "arguments": {…}}</tool_call> '
                         + 'with valid JSON and a matching </tool_call> tag. If you already have your answer, '
                         + 'reply in plain text instead.',
-                });
+                ));
                 continue;
             }
 
             // No tool calls — final response
+            if (!content.trim() && emptyRetries < MAX_EMPTY_RETRIES) {
+                // Drop the empty reply, since some providers reject an empty
+                // assistant message, and ask again.
+                emptyRetries++;
+                turnMessages.pop();
+                turnMessages.push(harnessPrompt(
+                    'Your last reply was empty. Continue from where you were: call the tool you '
+                        + 'need, or give your answer to the user.',
+                ));
+                continue;
+            }
             if (!content.trim()) {
                 return {
                     response: 'I received your question but had trouble generating a response. Please try rephrasing.',
@@ -395,8 +486,9 @@ export class Agent {
                 };
             }
 
-            // Store in conversation history
-            this.messages.push({ role: 'assistant', content });
+            // Keep the whole turn, tool calls and results included, as history
+            // (glen-harness#21). The reply is already the last of turnMessages.
+            this._keepTurn(turn);
             this.suspendedTurn = null;
 
             return { response: content, sqlQueries, cancelled: false };
@@ -415,7 +507,8 @@ export class Agent {
      * mid tool call, or before any text (reasoning ran out the budget), throws
      * a readable error instead, so nothing half-formed runs or enters history.
      */
-    _lengthLimited(message, modelConfig, sqlQueries) {
+    _lengthLimited(message, modelConfig, turn) {
+        const { sqlQueries } = turn;
         const limit = this._samplingParams(modelConfig).max_tokens;
         const where = limit
             ? `the response limit (max_tokens: ${limit})`
@@ -427,7 +520,8 @@ export class Agent {
         if (text && !hadCalls) {
             const note = `*(This answer was cut off at ${where}.${limit ? ' Raise max_tokens for this model to allow longer answers.' : ''})*`;
             const response = `${text}\n\n${note}`;
-            this.messages.push({ role: 'assistant', content: response });
+            turn.turnMessages.push({ role: 'assistant', content: response });
+            this._keepTurn(turn);
             this.suspendedTurn = null;
             return { response, sqlQueries, cancelled: false, truncated: true };
         }
@@ -446,16 +540,16 @@ export class Agent {
      * user message resumes it, and emit onCheckpoint. Returns a result the UI
      * renders as a checkpoint (summary + Continue), not an error.
      */
-    async _checkpoint(endpoint, modelConfig, turnMessages, sqlQueries, iterations) {
+    async _checkpoint(endpoint, modelConfig, turn, iterations) {
+        const { turnMessages, sqlQueries } = turn;
         const fallbackSummary = `I've run ${iterations} data queries so far and paused to check in. `
             + `Let me know if you'd like me to continue.`;
 
-        turnMessages.push({
-            role: 'user',
-            content: `You have reached a checkpoint after ${iterations} data ${iterations === 1 ? 'query' : 'queries'}. `
+        turnMessages.push(harnessPrompt(
+            `You have reached a checkpoint after ${iterations} data ${iterations === 1 ? 'query' : 'queries'}. `
                 + `Summarize for the user what you have done so far, the key findings, and what remains to be done. `
                 + `Then offer to continue.`,
-        });
+        ));
 
         let summary = '';
         try {
@@ -469,7 +563,7 @@ export class Agent {
                 // instruction we just appended) so "continue" resumes the
                 // investigation rather than discarding the remote rounds.
                 turnMessages.pop();
-                this.suspendedTurn = { turnMessages, sqlQueries };
+                this.suspendedTurn = turn;
                 return { response: null, sqlQueries, cancelled: true };
             }
             summary = fallbackSummary;
@@ -479,9 +573,12 @@ export class Agent {
         }
 
         // Persist the live turn so the next message resumes it instead of
-        // rebuilding from scratch. Record the summary in cross-turn history.
-        this.suspendedTurn = { turnMessages, sqlQueries };
-        this.messages.push({ role: 'assistant', content: summary });
+        // rebuilding from scratch. Record the summary in cross-turn history;
+        // _keepTurn replaces it with the full trace once the turn finishes.
+        this.suspendedTurn = turn;
+        const summaryEntry = { role: 'assistant', content: summary };
+        this.messages.push(summaryEntry);
+        turn.ownEntries.push(summaryEntry);
 
         this.onCheckpoint(summary, iterations);
         return { response: summary, sqlQueries, checkpoint: true, cancelled: false };
@@ -1212,6 +1309,150 @@ export class Agent {
                 arguments: JSON.stringify(tc.args),
             }
         }));
+    }
+
+    /**
+     * Put a finished turn into history, in its shorter form, in place of the
+     * entries the turn added while it ran: its opening message, and for a
+     * resumed turn the checkpoint summary and the message that resumed it.
+     * Keeping the tool calls lets a follow-up see which numbers were computed
+     * and how (glen-harness#21). Messages a host added during the turn stay,
+     * after it.
+     *
+     * The turn is shortened once, here, and never changed again, so every
+     * later request starts with the same bytes and the provider's prompt
+     * cache keeps covering it.
+     */
+    _keepTurn({ turnMessages, turnStart, ownEntries }) {
+        const at = this.messages.indexOf(ownEntries[0]);
+        if (at === -1 || !Number.isInteger(turnStart)) {
+            // History was cleared while the turn ran; nothing to put back.
+            return;
+        }
+        const own = new Set(ownEntries);
+        const kept = this._historyTurn(turnMessages.slice(turnStart));
+        const later = this.messages.slice(at).filter(m => !own.has(m));
+        this.messages.splice(at, this.messages.length - at, ...kept, ...later);
+    }
+
+    /**
+     * A finished turn's messages as history keeps them. The harness's own
+     * prompts are left out, with the unparseable reply a re-prompt answered,
+     * so two assistant messages never end up side by side.
+     */
+    _historyTurn(msgs) {
+        const out = [];
+        msgs.forEach((m, i) => {
+            if (HARNESS_PROMPTS.has(m)) {
+                const prev = out.at(-1);
+                if (prev?.role === 'assistant' && !prev.tool_calls && msgs[i + 1]?.role === 'assistant') out.pop();
+                return;
+            }
+            out.push(this._historyMessage(m));
+        });
+        return out;
+    }
+
+    /**
+     * One message as history keeps it. A tool result is cut to
+     * HISTORY_RESULT_CHARS. A reply keeps its text and tool calls and loses
+     * everything else the provider sent with it, such as reasoning. A reply
+     * whose calls were recovered from its text is given them as `tool_calls`,
+     * with the call text stripped, so the results after it are not orphaned.
+     */
+    _historyMessage(m) {
+        if (m.role === 'tool') {
+            const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+            const len = content.length;
+            return {
+                role: 'tool',
+                tool_call_id: m.tool_call_id,
+                content: len <= HISTORY_RESULT_CHARS ? content
+                    : `${content.slice(0, HISTORY_RESULT_CHARS)}\n... (first ${HISTORY_RESULT_CHARS} of ${len} `
+                        + 'characters; run the tool again if you need the rest)',
+            };
+        }
+        if (m.role !== 'assistant') return m;
+
+        const recovered = RECOVERED_CALLS.get(m);
+        const calls = m.tool_calls?.length ? m.tool_calls : recovered;
+        const content = (recovered ? this.stripEmbeddedCalls(m.content || '').trim() : m.content) || null;
+        if (!calls) return { role: 'assistant', content: content ?? '' };
+        return {
+            role: 'assistant',
+            content,
+            tool_calls: calls.map(tc => {
+                const args = typeof tc.function?.arguments === 'string'
+                    ? tc.function.arguments
+                    : JSON.stringify(tc.function?.arguments ?? {});
+                return {
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                        name: tc.function?.name,
+                        arguments: args.length <= HISTORY_ARGS_CHARS ? args
+                            : JSON.stringify({ omitted: `${args.length} characters of arguments left out of history` }),
+                    },
+                };
+            }),
+        };
+    }
+
+    /**
+     * The history budget in characters: per-model `history_budget_chars`,
+     * then the global setting, then HISTORY_BUDGET_CHARS.
+     */
+    _historyBudget(modelConfig) {
+        const n = ('history_budget_chars' in (modelConfig ?? {}))
+            ? modelConfig.history_budget_chars
+            : this.config?.history_budget_chars;
+        return Number.isFinite(n) && n > 0 ? n : HISTORY_BUDGET_CHARS;
+    }
+
+    /**
+     * Where each turn starts in this.messages, in order. A turn starts at its
+     * opening message, or at the host notes just before it. Anything before
+     * the first turn counts as a turn of its own. Every start is a user
+     * message or index 0, so cutting there never separates a tool call from
+     * its result.
+     */
+    _turnStarts() {
+        const msgs = this.messages;
+        let isStart = (m) => TURN_OPENERS.has(m);
+        // History built by a host rather than by processMessage: any user
+        // message after a non-user one starts a turn.
+        if (!msgs.some(isStart)) {
+            isStart = (m, i) => m.role === 'user' && (i === 0 || msgs[i - 1].role !== 'user');
+        }
+        const starts = [];
+        msgs.forEach((m, i) => {
+            if (!isStart(m, i)) return;
+            let s = i;
+            while (s > 0 && msgs[s - 1].role === 'user' && !TURN_OPENERS.has(msgs[s - 1])) s--;
+            if (starts.at(-1) !== s) starts.push(s);
+        });
+        if (starts[0] !== 0) starts.unshift(0);
+        return starts;
+    }
+
+    /**
+     * Keep history within the budget before a new turn is sent. When it is
+     * over, drop the oldest turns until it is under HISTORY_TARGET_SHARE of
+     * the budget. The current turn and the one before it are never dropped.
+     */
+    _fitHistory(modelConfig) {
+        const budget = this._historyBudget(modelConfig);
+        const size = (m) => JSON.stringify(m).length;
+        let total = this.messages.reduce((n, m) => n + size(m), 0);
+        if (total <= budget) return;
+        const target = budget * HISTORY_TARGET_SHARE;
+        const starts = this._turnStarts();
+        let cut = 0;
+        for (let t = 0; t < starts.length - 2 && total > target; t++) {
+            for (let i = starts[t]; i < starts[t + 1]; i++) total -= size(this.messages[i]);
+            cut = starts[t + 1];
+        }
+        if (cut > 0) this.messages.splice(0, cut);
     }
 
     /**
