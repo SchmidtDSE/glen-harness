@@ -132,7 +132,8 @@ export function modelsFromTierList(list, { endpoint, apiKey } = {}) {
 
 /**
  * Ask the model service for this app's tier list and apply it to `config` in
- * place (`llm_models`, `llm_model`). Returns the tier name. Throws a
+ * place (`llm_models`, `llm_model`, and `transcription_model` when the list
+ * names one). Returns the tier name. Throws a
  * ModelListError when there is no endpoint, the fetch fails, or the answer is
  * not a tier list; the config is then left as it was.
  */
@@ -151,6 +152,13 @@ export async function applyProxyModelList(config, { fetchImpl } = {}) {
     }
     config.llm_models = result.models;
     config.llm_model = result.selected;
+    // The tier's voice-input model (open-llm-proxy#210): callable with the same
+    // endpoint and key, though not listed in `data`. A list that names none
+    // leaves the config's own transcription_model as it is.
+    if (typeof list.transcription_model === 'string' && list.transcription_model) {
+        config.transcription_model = { value: list.transcription_model, endpoint: service.endpoint };
+        if (service.apiKey) config.transcription_model.api_key = service.apiKey;
+    }
     return list.tier;
 }
 

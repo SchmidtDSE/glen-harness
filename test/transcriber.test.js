@@ -62,11 +62,11 @@ describe('Transcriber.transcribe', () => {
         expect(global.fetch.mock.calls[0][0]).toBe('https://open-llm-proxy.nrp-nautilus.io/v1/chat/completions');
     });
 
-    it('falls back to "EMPTY" Authorization when api_key is absent', async () => {
+    it('sends no Authorization header when api_key is absent (glen#420)', async () => {
         global.fetch = vi.fn(async () => okResponse('x'));
         const t = new Transcriber({ value: 'm' });
         await t.transcribe({ data: 'b', format: 'wav' });
-        expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer EMPTY');
+        expect(global.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
     });
 
     it('throws an error including the HTTP status on a non-OK response', async () => {

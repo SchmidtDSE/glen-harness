@@ -180,6 +180,26 @@ describe('applyProxyModelList (glen#542)', () => {
         expect(global.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
     });
 
+    it('takes the tier\'s transcription model, with the same endpoint and key (open-llm-proxy#210)', async () => {
+        const withKey = { llm_endpoint: '/api/llm', llm_api_key: 'k' };
+        await applyProxyModelList(withKey, { fetchImpl: okFetch(tierList({ transcription_model: 'parakeet' })) });
+        expect(withKey.transcription_model).toEqual({ value: 'parakeet', endpoint: '/api/llm', api_key: 'k' });
+        expect(withKey.llm_models.some(m => m.value === 'parakeet')).toBe(false);
+
+        const noKey = { llm_endpoint: '/api/llm', transcription_model: { value: 'old' } };
+        await applyProxyModelList(noKey, { fetchImpl: okFetch(tierList({ transcription_model: 'gemma-small' })) });
+        expect(noKey.transcription_model).toEqual({ value: 'gemma-small', endpoint: '/api/llm' });
+    });
+
+    it('leaves the config\'s transcription model as it is when the list names none', async () => {
+        const config = { llm_endpoint: '/api/llm', transcription_model: { value: 'whisper', endpoint: '/x', api_key: 'y' } };
+        await applyProxyModelList(config, { fetchImpl: okFetch(tierList()) });
+        expect(config.transcription_model).toEqual({ value: 'whisper', endpoint: '/x', api_key: 'y' });
+        const none = { llm_endpoint: '/api/llm' };
+        await applyProxyModelList(none, { fetchImpl: okFetch(tierList()) });
+        expect('transcription_model' in none).toBe(false);
+    });
+
     it('throws ModelListError, leaving the config alone, when the service cannot be reached or answers wrongly', async () => {
         const config = { llm_endpoint: '/api/llm', llm_models: [{ value: 'm', endpoint: '/api/llm' }], llm_model: 'm' };
         const before = structuredClone(config);
