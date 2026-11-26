@@ -224,3 +224,58 @@ describe('Agent.callLLM enable_thinking in payload (#283)', () => {
         expect(bodies[0].enable_thinking).toBe(false);
     });
 });
+
+describe('Agent reasoning level (#23)', () => {
+    const agentWith = (model, global = {}) => new Agent(
+        { llm_models: [{ value: 'm', endpoint: 'https://x/v1', ...model }], ...global },
+        stubToolRegistry,
+    );
+
+    it('sends nothing for a model with no level or toggle', () => {
+        const a = agentWith({});
+        expect(a.reasoningLevels()).toEqual([]);
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({});
+    });
+
+    it('sends the model\'s default level, then the user\'s pick from its levels', () => {
+        const a = agentWith({ reasoning_efforts: ['none', 'low', 'medium', 'high'], reasoning_effort: 'medium' });
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({ reasoning_effort: 'medium' });
+        a.reasoningEffortOverride = 'low';
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({ reasoning_effort: 'low' });
+        a.reasoningEffortOverride = 'xhigh'; // not one of its levels
+        expect(a.reasoningEffort()).toBe('medium');
+    });
+
+    it('reads levels and default per model, then globally', () => {
+        const a = agentWith({}, { reasoning_efforts: ['low', 'high'], reasoning_effort: 'high' });
+        expect(a.reasoningLevels()).toEqual(['low', 'high']);
+        expect(a.reasoningEffort()).toBe('high');
+        const b = agentWith({ reasoning_efforts: ['none', 'high'] }, { reasoning_efforts: ['low'], reasoning_effort: 'low' });
+        expect(b.reasoningLevels()).toEqual(['none', 'high']);
+    });
+
+    it('keeps enable_thinking in step with a picked level on a model that takes both', () => {
+        const a = agentWith({ reasoning_toggle: true, reasoning_default: true, reasoning_efforts: ['none', 'high'] });
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({ enable_thinking: true });
+        a.reasoningEffortOverride = 'none';
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({ reasoning_effort: 'none', enable_thinking: false });
+        a.reasoningEffortOverride = 'high';
+        expect(a._thinkingParams(a.getModelConfig())).toEqual({ reasoning_effort: 'high', enable_thinking: true });
+    });
+
+    it('puts reasoning_effort in the request and resets the pick on a model switch', async () => {
+        const a = new Agent({ llm_models: [
+            { value: 'm', endpoint: 'https://x/v1', reasoning_efforts: ['low', 'high'], reasoning_effort: 'high' },
+            { value: 'n', endpoint: 'https://x/v1' },
+        ] }, stubToolRegistry);
+        a.reasoningEffortOverride = 'low';
+        const bodies = [];
+        global.fetch = vi.fn(async (_u, opts) => { bodies.push(JSON.parse(opts.body)); return okResponse({ role: 'assistant', content: 'ok' }); });
+        await a.processMessage('q');
+        expect(bodies[0].reasoning_effort).toBe('low');
+        a.setModel('n');
+        expect(a.reasoningEffortOverride).toBeNull();
+        await a.processMessage('q2');
+        expect('reasoning_effort' in bodies[1]).toBe(false);
+    });
+});

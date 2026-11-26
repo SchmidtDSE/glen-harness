@@ -102,6 +102,10 @@ export class Agent {
         // true/false = user asked for reasoning on/off for subsequent turns. Reset to
         // null on model switch so each model starts from its own configured default.
         this.reasoningOverride = null;
+        // Runtime reasoning level for a model that takes one (#23), set by the
+        // host UI's level selector; one of the model's `reasoning_efforts`, or
+        // null for the configured default. Reset on model switch.
+        this.reasoningEffortOverride = null;
         // Checkpoint thresholds: how many *remote* tool-call rounds before the
         // agent pauses to report progress and ask to continue. Auto-approve uses
         // the tighter value (the checkpoint is the user's periodic gate); manual
@@ -146,6 +150,7 @@ export class Agent {
         // Clear any per-conversation reasoning override so the newly-selected
         // model resolves from its own configured default.
         this.reasoningOverride = null;
+        this.reasoningEffortOverride = null;
     }
 
     /**
@@ -712,7 +717,8 @@ export class Agent {
     }
 
     /**
-     * Resolve the thinking-control payload for a turn. Emits `enable_thinking`
+     * Resolve the thinking-control payload for a turn. Emits `reasoning_effort`
+     * when the model has a level (see reasoningEffort), and `enable_thinking`
      * (a normalized flag the open-llm-proxy maps to the correct per-backend
      * chat-template knob) only when this model participates — i.e. the deployer
      * enabled the toggle or set a default. Otherwise the key is omitted so the
@@ -726,13 +732,50 @@ export class Agent {
     _thinkingParams(modelConfig) {
         const capable = this._reasoningCapable(modelConfig);
         const dflt = this._reasoningDefault(modelConfig);
+        const effort = this.reasoningEffort(modelConfig);
+        const out = effort ? { reasoning_effort: effort } : {};
         // Untouched unless the deployer opted this model in somehow.
-        if (!capable && dflt === undefined) return {};
+        if (!capable && dflt === undefined) return out;
         let value;
         if (typeof this.reasoningOverride === 'boolean') value = this.reasoningOverride;
+        // A level the user picked also decides on/off for a model that takes
+        // both, so the two fields never disagree: 'none' is off.
+        else if (this.reasoningEffortOverride && effort) value = effort !== 'none';
         else if (typeof dflt === 'boolean') value = dflt;
         else value = capable ? true : undefined; // toggle shown → defaults on
-        return typeof value === 'boolean' ? { enable_thinking: value } : {};
+        return typeof value === 'boolean' ? { ...out, enable_thinking: value } : out;
+    }
+
+    /**
+     * The reasoning levels a model offers (#23): per-model `reasoning_efforts`,
+     * then the global one, as a list of strings such as
+     * `["none", "low", "medium", "high"]`. Empty when the model takes no level,
+     * as for NRP's vLLM models, which have only on/off (`reasoning_toggle`).
+     * The model service sets it in each model's settings (glen#542).
+     */
+    reasoningLevels(modelConfig = this.getModelConfig()) {
+        const v = ('reasoning_efforts' in (modelConfig ?? {}))
+            ? modelConfig.reasoning_efforts
+            : this.config?.reasoning_efforts;
+        return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
+    }
+
+    /**
+     * The reasoning level to send as `reasoning_effort`, or undefined to send
+     * none (#23). The user's pick from the model's levels wins, then the
+     * per-model `reasoning_effort`, then the global one. open-llm-proxy
+     * forwards it unchanged (open-llm-proxy#205); the model server decides
+     * what it accepts, so it is set only for models that take one.
+     */
+    reasoningEffort(modelConfig = this.getModelConfig()) {
+        const levels = this.reasoningLevels(modelConfig);
+        if (this.reasoningEffortOverride && levels.includes(this.reasoningEffortOverride)) {
+            return this.reasoningEffortOverride;
+        }
+        const v = ('reasoning_effort' in (modelConfig ?? {}))
+            ? modelConfig.reasoning_effort
+            : this.config?.reasoning_effort;
+        return typeof v === 'string' && v ? v : undefined;
     }
 
     /**

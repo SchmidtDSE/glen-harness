@@ -680,7 +680,21 @@ export class ChatUI {
     syncReasoningToggle() {
         const btn = this.reasoningBtn;
         if (!btn) return;
-        const capable = this.agent._reasoningCapable(this.agent.getModelConfig());
+        // A model that offers reasoning levels gets the level selector in
+        // place of the on/off toggle (#23).
+        const mc = this.agent.getModelConfig();
+        const levels = this.agent.reasoningLevels(mc);
+        const select = this.reasoningSelect;
+        if (select) {
+            const showLevels = levels.length >= 2;
+            select.style.display = showLevels ? '' : 'none';
+            if (showLevels) {
+                this._fillReasoningLevels(select, levels, this.agent.reasoningEffort(mc));
+                btn.style.display = 'none';
+                return;
+            }
+        }
+        const capable = this.agent._reasoningCapable(mc);
         btn.style.display = capable ? '' : 'none';
         if (!capable) return;
         const on = this.reasoningState();
@@ -702,9 +716,43 @@ export class ChatUI {
             this.syncReasoningToggle();
         });
 
+        // Level selector for models that take a reasoning level (#23).
+        const select = document.createElement('select');
+        select.id = 'reasoning-effort';
+        select.title = 'Reasoning level: lower answers faster, higher thinks longer on hard questions.';
+        select.setAttribute('aria-label', 'Reasoning level');
+        select.style.display = 'none';
+        select.addEventListener('change', () => {
+            this.agent.reasoningEffortOverride = select.value || null;
+            this.syncReasoningToggle();
+        });
+
+        footer.prepend(select);
         footer.prepend(btn);
         this.reasoningBtn = btn;
+        this.reasoningSelect = select;
         this.syncReasoningToggle();
+    }
+
+    /**
+     * Fill the level selector with a model's levels and select the one in
+     * effect. With no level configured, a "default" entry stands for the
+     * model's own default, so the selector never shows a level not being sent.
+     */
+    _fillReasoningLevels(select, levels, current) {
+        // A configured default outside the list is shown too, since it is sent.
+        const values = current ? (levels.includes(current) ? levels : [current, ...levels]) : ['', ...levels];
+        const key = values.join('|');
+        if (select.dataset.levels !== key) {
+            select.replaceChildren(...values.map(v => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = `🧠 ${v || 'default'}`;
+                return opt;
+            }));
+            select.dataset.levels = key;
+        }
+        select.value = current || '';
     }
 
     /* ------------------------------------------------------------------ */
