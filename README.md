@@ -33,7 +33,7 @@ The agent pauses at a checkpoint after a set number of rounds that call remote t
 
 ### Request shaping
 
-Sampling parameters (`temperature`, `top_p`, `seed`, `max_tokens`) are read per model and then globally, and `temperature` defaults to 0 so that answers do not depend on each endpoint's own default. A model that the deployment opts in through `reasoning_toggle` or `reasoning_default` is sent `enable_thinking`, which open-llm-proxy maps to each backend's own setting ([glen#283](https://github.com/SchmidtDSE/glen/issues/283)). With `prompt_cache` set, the system prompt carries an Anthropic `cache_control` breakpoint ([glen#273](https://github.com/SchmidtDSE/glen/issues/273)). Each request times out after 600 seconds unless `llm_timeout_seconds` says otherwise, and every retry gets that full budget: a timeout is retried once, and a network error or 5xx response up to twice, after waiting 15 and then 60 seconds ([glen#437](https://github.com/SchmidtDSE/glen/issues/437)). The `X-Client` header goes only to trusted proxy hosts (`nrp-nautilus.io` by default, or `client_header_hosts`), because a custom header on any other endpoint can fail the browser's CORS check ([glen#254](https://github.com/SchmidtDSE/glen/issues/254)). A model without an `api_key` is sent no `Authorization` header, so a deployment behind basic auth keeps working ([glen#420](https://github.com/SchmidtDSE/glen/issues/420)).
+Sampling parameters (`temperature`, `top_p`, `seed`, `max_tokens`) are read per model and then globally, and `temperature` defaults to 0 so that answers do not depend on each endpoint's own default. A model that the deployment opts in through `reasoning_toggle` or `reasoning_default` is sent `enable_thinking`, which open-llm-proxy maps to each backend's own setting ([glen#283](https://github.com/SchmidtDSE/glen/issues/283)). With `prompt_cache` set, the system prompt carries an Anthropic `cache_control` breakpoint ([glen#273](https://github.com/SchmidtDSE/glen/issues/273)). Each request times out after 600 seconds unless `llm_timeout_seconds` says otherwise, and every retry gets that full budget: a timeout is retried once, and a network error or 5xx response up to twice, after waiting 15 and then 60 seconds ([glen#437](https://github.com/SchmidtDSE/glen/issues/437)). The `X-Client` header goes only to trusted proxy hosts (`nrp-nautilus.io` by default, or `client_header_hosts`), because a custom header on any other endpoint can fail the browser's CORS check ([glen#254](https://github.com/SchmidtDSE/glen/issues/254)). A model without an `api_key` is sent no `Authorization` header, so a deployment behind basic auth keeps working ([glen#420](https://github.com/SchmidtDSE/glen/issues/420)). Each request is logged to the console when it starts and when it ends or fails, with the model, the number of messages, the attempt and the time taken, so a stalled or repeated request can be traced ([#24](https://github.com/SchmidtDSE/glen-harness/issues/24)).
 
 ### Tool-call recovery
 
@@ -64,7 +64,7 @@ The reasons for keeping this code are recorded in glen's [tool-call parsing desi
 | `ui/chat-docked.css` | Styles for the chat in a page column (geo-agent's sidebar look), coloured by CSS tokens a host can override, such as `--control-bg`. |
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1';
 const [{ Agent, ToolRegistry }, { ChatUI, buildChatPanel, loadChatDeps }] =
     await Promise.all([import(`${H}/src/index.js`), import(`${H}/ui/index.js`)]);
 
@@ -127,7 +127,7 @@ With `authFailed` the chat says the data server needs a token and opens the pane
 An app whose tools all run in the page imports the `./core` entry (`src/core.js`) and the chat module:
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.0';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1';
 const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
@@ -139,10 +139,10 @@ These load nine files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `s
 In a browser, import from jsDelivr pinned to a tag. There is no build step.
 
 ```js
-import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.0/src/index.js';
+import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1/src/index.js';
 ```
 
-In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.9.0`), as the package is not yet on npm:
+In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.9.1`), as the package is not yet on npm:
 
 ```js
 import { Agent, ToolRegistry, MCPClient } from 'glen-harness';
@@ -170,7 +170,7 @@ const { response } = await agent.processMessage('How many protected areas are in
 
 [`examples/node.js`](examples/node.js) is a runnable version. Without an LLM key it connects to the MCP server and lists the tools.
 
-Several MCP servers can register in one registry, and each tool call goes to the server that listed the tool. Pass each server's place in the app's configuration as `rank`: when two servers list a tool of the same name, the lower rank keeps it. `clearRemote(client)` drops one server's tools after it reconnects and leaves the others in place.
+A tool call waits 30 seconds for its response when the tool is a metadata lookup (`get_schema`, `get_stac_details`, `get_collection`, `browse_stac_catalog`) and 600 seconds otherwise; `new MCPClient(url, headers, { toolTimeoutsMs: { name: ms } })` changes either. When the response does not come, or the connection fails, the client reconnects and tries the call once more, so a lost response to a lookup costs about half a minute rather than ten ([#20](https://github.com/SchmidtDSE/glen-harness/issues/20)). Each call's start and end are logged to the console with the server's URL and the time taken, and each result carries `ms` and `server`, which the session record keeps and the export's session log shows ([#24](https://github.com/SchmidtDSE/glen-harness/issues/24)). Several MCP servers can register in one registry, and each tool call goes to the server that listed the tool. Pass each server's place in the app's configuration as `rank`: when two servers list a tool of the same name, the lower rank keeps it. `clearRemote(client)` drops one server's tools after it reconnects and leaves the others in place.
 
 MCP gives a client no way to ask a server for part of its tool list, so the registry filters instead. `include` registers only the named tools, and `exclude` registers all but those:
 

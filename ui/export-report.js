@@ -702,6 +702,15 @@ ${status}
 
 const LOG_RESULT_CHARS = 4000;
 
+/** " · 812 ms · server" for a step that recorded its timing (glen-harness#24). */
+function stepTiming(s) {
+    const parts = [];
+    if (s.cached) parts.push('cached');
+    else if (Number.isFinite(s.ms)) parts.push(s.ms >= 10000 ? `${(s.ms / 1000).toFixed(1)} s` : `${s.ms} ms`);
+    if (s.server) parts.push(s.server);
+    return parts.length ? ` <span class="log-timing">· ${escapeHtmlText(parts.join(' · '))}</span>` : '';
+}
+
 /** The appendix: every call, unedited, collapsed per question. */
 function sessionLogHtml(record) {
     const turns = (record.turns || []).filter(t => (t.steps || []).length);
@@ -719,7 +728,7 @@ function sessionLogHtml(record) {
             if (result.length > LOG_RESULT_CHARS) result = result.slice(0, LOG_RESULT_CHARS) + '\n… (truncated in the export)';
             const mark = isFailedStep(s) ? '✗' : '✓';
             return `<div class="log-call${isFailedStep(s) ? ' failed' : ''}">
-<p class="log-call-name">${mark} <code>${escapeHtmlText(s.name)}</code>${s.source === 'remote' ? ' <span class="log-tag">MCP</span>' : ''}</p>
+<p class="log-call-name">${mark} <code>${escapeHtmlText(s.name)}</code>${s.source === 'remote' ? ' <span class="log-tag">MCP</span>' : ''}${stepTiming(s)}</p>
 <pre class="log-args"><code>${escapeHtmlText(scrubCredentials(JSON.stringify(args, null, 2) ?? ''))}</code></pre>
 <pre class="log-result"><code>${escapeHtmlText(result)}</code></pre>
 </div>`;
@@ -1447,6 +1456,7 @@ pre.chunk-output { padding: 0.5rem 1rem; border: 1px solid var(--rule); border-r
 .log-call.failed .log-call-name { color: #b02a37; }
 .log-call-name { margin: 0 0 0.25rem; }
 .log-tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #dbeafe; color: #1e40af; }
+.log-timing { font-size: 11px; color: #6b7280; font-weight: normal; }
 .log-args, .log-result { background: var(--code-bg); padding: 0.4rem 0.6rem; margin: 0.25rem 0; overflow-x: auto;
                          white-space: pre-wrap; word-break: break-word; max-height: 18rem; overflow-y: auto; font-size: 0.75rem; }
 .log-note { color: var(--muted); font-size: 0.8rem; font-style: italic; margin: 0.25rem 0; }
