@@ -821,9 +821,18 @@ export class Agent {
 
         const timeoutMs = this._llmTimeoutMs(modelConfig);
         for (let retries = 0; ; retries++) {
+            // Log each request's start and end, so a stalled or repeated
+            // request shows up in the console with its timing (glen-harness#24).
+            const t0 = Date.now();
+            const label = `${payload.model}, ${messages.length} messages${retries ? `, retry ${retries}` : ''}`;
+            console.info(`[Agent] LLM request → ${label}`);
             try {
-                return await this._attemptLLMCall(endpoint, modelConfig, payload, timeoutMs);
+                const message = await this._attemptLLMCall(endpoint, modelConfig, payload, timeoutMs);
+                console.info(`[Agent] LLM response ← ${Date.now() - t0} ms (${label})`);
+                return message;
             } catch (error) {
+                console.warn(`[Agent] LLM request failed after ${Date.now() - t0} ms (${label}): `
+                    + `${error.timedOut ? 'timed out' : error.status ? `HTTP ${error.status}` : error.name || 'error'}`);
                 if (!this._isTransientLLMError(error)) throw error;
                 if (this.abortController?.signal.aborted) throw error; // user-Stop, don't retry
                 const delays = Array.isArray(this.retryDelaysMs) ? this.retryDelaysMs : [];

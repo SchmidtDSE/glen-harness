@@ -1313,6 +1313,9 @@ export class ChatUI {
                 source: r.source || null,
                 result: typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? ''),
                 ...(r.sqlQuery ? { sqlQuery: r.sqlQuery } : {}),
+                ...(Number.isFinite(r.ms) ? { ms: r.ms } : {}),
+                ...(r.server ? { server: r.server } : {}),
+                ...(r.cached ? { cached: true } : {}),
             });
         });
         rec._calls.delete(iteration);

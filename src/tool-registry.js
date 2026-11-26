@@ -308,6 +308,7 @@ export class ToolRegistry {
         }
 
         let result;
+        const t0 = Date.now();
         try {
             if (tool.source === 'local') {
                 const raw = await tool.execute(args);
@@ -336,8 +337,13 @@ export class ToolRegistry {
                 name,
                 result: `Error executing ${name}: ${error.message}`,
                 source: 'error',
+                ms: Date.now() - t0,
+                ...(tool.mcpClient?.serverUrl ? { server: tool.mcpClient.serverUrl } : {}),
             };
         }
+        // How long the call took, and which server answered (glen-harness#24).
+        result.ms = Date.now() - t0;
+        if (tool.source !== 'local' && tool.mcpClient?.serverUrl) result.server = tool.mcpClient.serverUrl;
 
         // Only cache genuine successes — never a result that reports failure
         // inside its own payload, so a transient outage doesn't stick.

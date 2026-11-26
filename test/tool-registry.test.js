@@ -575,3 +575,28 @@ describe('ToolRegistry include and exclude', () => {
         expect(reg.getToolsForLLM()).toHaveLength(1);
     });
 });
+
+describe('ToolRegistry timing (glen-harness#24)', () => {
+    it('records how long each call took, and which server answered a remote one', async () => {
+        const reg = new ToolRegistry();
+        reg.registerRemote([stubMcpTool()], { callTool: vi.fn(async () => 'rows'), serverUrl: 'https://mcp.example/mcp' });
+        reg.registerLocal({ name: 'local_t', description: 'L', inputSchema: { type: 'object', properties: {} }, execute: () => 'ok' });
+
+        const remote = await reg.execute(stubMcpTool().name, {});
+        expect(Number.isFinite(remote.ms)).toBe(true);
+        expect(remote.server).toBe('https://mcp.example/mcp');
+
+        const local = await reg.execute('local_t', {});
+        expect(Number.isFinite(local.ms)).toBe(true);
+        expect(local.server).toBeUndefined();
+    });
+
+    it('records the time and server of a failed remote call', async () => {
+        const reg = new ToolRegistry();
+        reg.registerRemote([stubMcpTool()], { callTool: vi.fn(async () => { throw new Error('down'); }), serverUrl: 'https://mcp.example/mcp' });
+        const r = await reg.execute(stubMcpTool().name, {});
+        expect(r.success).toBe(false);
+        expect(Number.isFinite(r.ms)).toBe(true);
+        expect(r.server).toBe('https://mcp.example/mcp');
+    });
+});

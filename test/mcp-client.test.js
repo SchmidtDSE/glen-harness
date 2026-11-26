@@ -21,7 +21,7 @@ vi.mock('../src/vendor/mcp-sdk.js', () => ({
     StreamableHTTPClientTransport: vi.fn(),
 }));
 
-const { MCPClient } = await import('../src/mcp-client.js');
+const { MCPClient, METADATA_TOOL_TIMEOUT_MS, DEFAULT_TOOL_TIMEOUT_MS } = await import('../src/mcp-client.js');
 const { Client } = await import('../src/vendor/mcp-sdk.js');
 
 const lastClient = () => clientInstances[clientInstances.length - 1];
@@ -225,6 +225,55 @@ describe('MCPClient callTool', () => {
             expect(out).toBe('after-retry');
         } finally {
             vi.useRealTimers();
+        }
+    });
+
+    it('gives metadata tools a short response timeout and the rest the long one (#20)', async () => {
+        const c = new MCPClient('https://mcp/', {}, { toolTimeoutsMs: { query: 120000, fit_sdm: 0 } });
+        await c.connect();
+        await c.callTool('get_schema', {});
+        await c.callTool('get_stac_details', {});
+        await c.callTool('query', {});
+        await c.callTool('fit_sdm', {});
+        const timeouts = lastClient().callTool.mock.calls.map(call => call[2].timeout);
+        expect(timeouts).toEqual([METADATA_TOOL_TIMEOUT_MS, METADATA_TOOL_TIMEOUT_MS, 120000, DEFAULT_TOOL_TIMEOUT_MS]);
+        expect(METADATA_TOOL_TIMEOUT_MS).toBe(30000);
+        expect(new MCPClient('https://mcp/').toolTimeoutMs('query')).toBe(600000);
+    });
+
+    it('reconnects and retries once when a response never comes (SDK "Request timed out") (#20)', async () => {
+        vi.useFakeTimers();
+        try {
+            const c = new MCPClient('https://mcp/');
+            await c.connect();
+            const timeout = Object.assign(new Error('MCP error -32001: Request timed out'), { code: -32001 });
+            lastClient().callTool.mockRejectedValueOnce(timeout);
+            Client.mockImplementationOnce(() => {
+                const instance = buildClientInstance();
+                instance.callTool = vi.fn(async () => ({ content: [{ text: 'after-retry' }] }));
+                clientInstances.push(instance);
+                return instance;
+            });
+            const promise = c.callTool('get_schema', {});
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(await promise).toBe('after-retry');
+            expect(console.warn.mock.calls.some(([m]) => /get_schema got no response after \d+ ms/.test(m))).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('logs each call\'s start and end with the server and duration (#24)', async () => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+        try {
+            const c = new MCPClient('https://mcp.example/mcp');
+            await c.connect();
+            await c.callTool('query', {});
+            const lines = info.mock.calls.map(([m]) => m);
+            expect(lines).toContain('[MCP] query → https://mcp.example/mcp (timeout 600s)');
+            expect(lines.some(m => /^\[MCP\] query ← \d+ ms$/.test(m))).toBe(true);
+        } finally {
+            info.mockRestore();
         }
     });
 

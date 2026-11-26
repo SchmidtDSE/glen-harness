@@ -21,6 +21,18 @@ import { Client, StreamableHTTPClientTransport } from './vendor/mcp-sdk.js';
 // A visitor's MCP token (glen#442); re-exported for hosts that connect here.
 export { STORAGE_KEY_MCP_TOKEN, userTokenApplies, withUserToken, isMcpAuthError, loadMcpToken } from './mcp-token.js';
 
+// How long a tool call may wait for its response. Metadata lookups answer in
+// seconds, so a lost response to one should cost a short wait and one retry,
+// not the 10 minutes a heavy query may need (glen-harness#20). Override per
+// tool with the `toolTimeoutsMs` option.
+export const DEFAULT_TOOL_TIMEOUT_MS = 600000;
+export const METADATA_TOOL_TIMEOUT_MS = 30000;
+export const METADATA_TOOLS = ['get_schema', 'get_stac_details', 'get_collection', 'browse_stac_catalog'];
+
+// The SDK's request-timeout error (`McpError`, code -32001, "Request timed out").
+const isTimeoutError = (error) =>
+    error?.code === -32001 || /timed? ?out/i.test(error?.message || '');
+
 export class MCPClient {
     /**
      * @param {string} serverUrl - Streamable HTTP endpoint of the MCP server.
@@ -31,12 +43,19 @@ export class MCPClient {
      *   client identifies itself in the MCP handshake.
      * @param {() => Object} [options.transport] - Returns a fresh MCP transport
      *   for each connect (and reconnect), in place of Streamable HTTP.
+     * @param {Object<string, number>} [options.toolTimeoutsMs] - Per-tool response
+     *   timeouts in ms. Defaults: METADATA_TOOL_TIMEOUT_MS for METADATA_TOOLS,
+     *   DEFAULT_TOOL_TIMEOUT_MS for the rest.
      */
     constructor(serverUrl, headers = {}, options = {}) {
         this.serverUrl = serverUrl;
         this.headers = headers;
         this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.9.0' };
         this.transportFactory = options.transport ?? null;
+        this.toolTimeoutsMs = {
+            ...Object.fromEntries(METADATA_TOOLS.map(n => [n, METADATA_TOOL_TIMEOUT_MS])),
+            ...(options.toolTimeoutsMs || {}),
+        };
         this.client = null;
         this.connected = false;
         this.tools = [];
@@ -203,50 +222,68 @@ export class MCPClient {
         return this.tools;
     }
 
+    /** The response timeout for a tool, in ms. */
+    toolTimeoutMs(name) {
+        const ms = this.toolTimeoutsMs[name];
+        return Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_TOOL_TIMEOUT_MS;
+    }
+
     /**
      * Call an MCP tool by name with arguments.
-     * Handles reconnection transparently.
-     * 
+     * Handles reconnection transparently: after a connection error or a
+     * timeout it reconnects and tries once more. Each call's start, end and
+     * duration are logged to the console with the server's URL, so a stalled
+     * call can be traced (glen-harness#24).
+     *
      * @param {string} name - Tool name (e.g., 'query')
      * @param {Object} args - Tool arguments (e.g., { sql_query: '...' })
      * @returns {string} Text result from the tool
      */
     async callTool(name, args) {
         await this.ensureConnected();
+        const timeout = this.toolTimeoutMs(name);
+        const t0 = Date.now();
+        console.info(`[MCP] ${name} → ${this.serverUrl} (timeout ${Math.round(timeout / 1000)}s)`);
 
         try {
-            const result = await this.client.callTool({ name, arguments: args }, undefined, { timeout: 600000 });
+            const text = await this._callOnce(name, args, timeout);
+            console.info(`[MCP] ${name} ← ${Date.now() - t0} ms`);
             this.reconnectAttempts = 0;
-
-            if (result.content && result.content.length > 0) {
-                const text = result.content[0].text;
-                if (!text || text.trim() === '') {
-                    return 'Query executed successfully but returned no data.';
-                }
-                return text;
-            }
-
-            throw new Error('No content in MCP response');
+            return text;
         } catch (error) {
-            // If it's a connection error, try once more after reconnect
-            const isConnectionError =
+            const timedOut = isTimeoutError(error);
+            // If it's a connection error or the response never came, try once more after reconnect
+            const isConnectionError = timedOut ||
                 error.message?.includes('fetch') ||
                 error.message?.includes('network') ||
-                error.message?.includes('timeout') ||
                 error.name === 'TypeError';
 
             if (isConnectionError) {
-                console.warn('[MCP] Connection error during callTool, reconnecting...');
+                console.warn(`[MCP] ${name} ${timedOut ? 'got no response' : `failed (${error.message})`}`
+                    + ` after ${Date.now() - t0} ms; reconnecting to retry once`);
                 this.connected = false;
                 await this.ensureConnected();
-                // Retry once
-                const result = await this.client.callTool({ name, arguments: args }, undefined, { timeout: 600000 });
-                if (result.content?.[0]?.text) return result.content[0].text;
-                throw new Error('No content in MCP response after retry');
+                const t1 = Date.now();
+                const text = await this._callOnce(name, args, timeout);
+                console.info(`[MCP] ${name} ← ${Date.now() - t1} ms on retry (${Date.now() - t0} ms in all)`);
+                return text;
             }
 
+            console.warn(`[MCP] ${name} failed after ${Date.now() - t0} ms: ${error.message}`);
             throw error;
         }
+    }
+
+    async _callOnce(name, args, timeout) {
+        const result = await this.client.callTool({ name, arguments: args }, undefined, { timeout });
+        if (result.content && result.content.length > 0) {
+            const text = result.content[0].text;
+            if (!text || text.trim() === '') {
+                return 'Query executed successfully but returned no data.';
+            }
+            return text;
+        }
+        throw new Error('No content in MCP response');
     }
 
     /**
