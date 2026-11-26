@@ -250,6 +250,18 @@ export class Agent {
         // the last all-failed round and how many times it has repeated since.
         let repeatedFailureStreak = 0;
         let lastFailedRoundSig = null;
+        // Repeated-success short-circuit (glen-harness#19). A model that
+        // re-issues the byte-identical call(s) that just succeeded is not making
+        // progress either: the result is already in its context. The first
+        // repeat is not run; the model is told to use the earlier result. A
+        // second repeat checkpoints.
+        let lastSucceededRoundSig = null;
+        let repeatedSuccessStreak = 0;
+        // Empty-reply retries this turn (glen-harness#25): a reply with no text
+        // and no tool call, usually reasoning that broke off, is asked for again
+        // once before the turn gives up.
+        let emptyRetries = 0;
+        const MAX_EMPTY_RETRIES = 1;
 
         try {
         while (true) {
@@ -310,6 +322,24 @@ export class Agent {
                 parseRetries = 0;
                 const calls = toolCalls.length > 0 ? toolCalls : this.syntheticToolCalls(embeddedCalls);
                 if (toolCalls.length === 0) RECOVERED_CALLS.set(message, calls);
+
+                const roundSig = JSON.stringify(calls.map(c => [c.function?.name, c.function?.arguments]));
+                repeatedSuccessStreak = roundSig === lastSucceededRoundSig ? repeatedSuccessStreak + 1 : 0;
+                if (repeatedSuccessStreak === 1) {
+                    for (const tc of calls) {
+                        turnMessages.push({
+                            role: 'tool',
+                            tool_call_id: tc.id,
+                            content: `You already called ${tc.function?.name} with these arguments, and the `
+                                + 'result is in the earlier tool message. It was not run again. Use that '
+                                + 'result and continue, or answer the user.',
+                        });
+                    }
+                    continue;
+                }
+                if (repeatedSuccessStreak >= 2) {
+                    return await this._checkpoint(endpoint, modelConfig, turn, iterations);
+                }
 
                 // Classify: are all calls local (auto-approve) or mixed?
                 const allLocal = calls.every(tc => this.toolRegistry.isLocal(tc.function.name));
@@ -392,12 +422,12 @@ export class Agent {
                 // the identical call(s) that just failed, and every call failed
                 // again, the model is stuck. Steer it once; if it still repeats,
                 // checkpoint instead of looping to the localOnlyStreak cap.
-                const roundSig = JSON.stringify(calls.map(c => [c.function?.name, c.function?.arguments]));
                 const roundFailed = results.length > 0 && results.every(r => this._isFailedResult(r));
                 repeatedFailureStreak = (roundFailed && roundSig === lastFailedRoundSig)
                     ? repeatedFailureStreak + 1
                     : 0;
                 lastFailedRoundSig = roundFailed ? roundSig : null;
+                lastSucceededRoundSig = roundFailed ? null : roundSig;
                 if (repeatedFailureStreak === 1) {
                     const errText = (results.find(r => this._isFailedResult(r))?.result || '').slice(0, 300);
                     turnMessages.push(harnessPrompt(
@@ -437,6 +467,17 @@ export class Agent {
             }
 
             // No tool calls — final response
+            if (!content.trim() && emptyRetries < MAX_EMPTY_RETRIES) {
+                // Drop the empty reply, since some providers reject an empty
+                // assistant message, and ask again.
+                emptyRetries++;
+                turnMessages.pop();
+                turnMessages.push(harnessPrompt(
+                    'Your last reply was empty. Continue from where you were: call the tool you '
+                        + 'need, or give your answer to the user.',
+                ));
+                continue;
+            }
             if (!content.trim()) {
                 return {
                     response: 'I received your question but had trouble generating a response. Please try rephrasing.',
