@@ -50,7 +50,7 @@ export class MCPClient {
     constructor(serverUrl, headers = {}, options = {}) {
         this.serverUrl = serverUrl;
         this.headers = headers;
-        this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.9.0' };
+        this.clientInfo = options.clientInfo ?? { name: 'glen-harness', version: '0.9.1' };
         this.transportFactory = options.transport ?? null;
         this.toolTimeoutsMs = {
             ...Object.fromEntries(METADATA_TOOLS.map(n => [n, METADATA_TOOL_TIMEOUT_MS])),
