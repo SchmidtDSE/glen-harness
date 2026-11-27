@@ -300,3 +300,27 @@ describe('history budget', () => {
         expect(agent.messages.map(m => m.content)).toEqual(['recent question', 'recent answer', 'new question']);
     });
 });
+
+describe('history message cap (open-llm-proxy#164)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('drops the oldest turns when history has too many messages, though it is small', async () => {
+        const agent = makeAgent({ history_max_messages: 12 });
+        for (let i = 0; i < 6; i++) {
+            mockLLM(call(`c${i}`, `SELECT ${i}`), text(`a${i}`));
+            await agent.processMessage(`q${i}`);
+        }
+        // Each turn keeps 4 messages; before turn 6 history held 20 > 12, so
+        // turns were dropped down to at most 9 (75%), whole turns only.
+        expect(agent.messages.length).toBeLessThanOrEqual(12);
+        expect(agent.messages[0]).toMatchObject({ role: 'user' });
+        expect(agent.messages.at(-1).content).toBe('a5');
+        expectPairedToolMessages(agent.messages);
+    });
+
+    it('defaults to 100 messages, per model before global', () => {
+        expect(makeAgent()._historyMaxMessages({})).toBe(100);
+        expect(makeAgent({ history_max_messages: 40 })._historyMaxMessages({})).toBe(40);
+        expect(makeAgent({ history_max_messages: 40 })._historyMaxMessages({ history_max_messages: 10 })).toBe(10);
+    });
+});
