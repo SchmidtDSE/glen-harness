@@ -1067,15 +1067,19 @@ export class Agent {
     /**
      * Parse embedded tool calls from message content (#288, #295).
      *
-     * Upstream hosts that stop emitting structured `tool_calls` fall back to a
-     * grab-bag of content dialects — we must be tolerant of all of them or the
-     * raw call leaks to the user as the final answer. Handled here:
-     *   - Wrappers: <tool_call>… (GLM-style) *and* <tool_code>… (Gemini-style),
-     *     with a missing / mismatched closing tag (#288, failure mode 1).
-     *   - Bare, unwrapped JSON tool-call objects, singly or concatenated (#295).
+     * A model that writes its call into the reply text instead of `tool_calls`
+     * still does so in one form among current models (NRP gpt-oss, 2026-11):
+     *   - A <tool_call>… (or <tool_code>…) wrapper around JSON, with a missing
+     *     or mismatched closing tag tolerated (#288, failure mode 1).
      *   - Body shapes: flat {"name","arguments"} *and* nested OpenAI
-     *     {"type":"function","function":{"name","arguments"}} (#295).
-     *   - `parameters` as an alias for `arguments` (#295).
+     *     {"type":"function","function":{"name","arguments"}}, with
+     *     `parameters` as an alias for `arguments`, one or several objects (#295).
+     *
+     * Other forms (bare JSON with no wrapper, `<function=NAME>`, `name(…)`
+     * calls and lone names inside a wrapper) fired only on models that are no
+     * longer configured, and were removed after a replay of the proxy logs
+     * (glen-harness#3). Such text now reaches looksLikeAttemptedToolCall,
+     * which asks the model to send the call again.
      */
     parseEmbeddedToolCalls(content) {
         if (!content) return [];
@@ -1088,108 +1092,36 @@ export class Agent {
         // the literal open tag, so lastIndex always advances.
         const pattern = /<tool_c(?:all|ode)>\s*([\s\S]*?)\s*(?=<\/|<tool_c(?:all|ode)>|$)/gi;
         let match;
-        let sawWrapper = false;
         while ((match = pattern.exec(content)) !== null) {
-            sawWrapper = true;
-            const inner = match[1].trim();
-            if (inner) this._pushEmbeddedCall(inner, calls);
-        }
-
-        // Bare (unwrapped) tool-call JSON — only when no wrapper was seen, to avoid
-        // double-extracting and to keep the scan off ordinary prose. `_normalizeCall`
-        // is signature-gated, so a final answer that merely contains JSON (e.g. a
-        // style blob) is not misread as a call.
-        if (!sawWrapper) {
-            for (const { value } of this._scanJSONObjects(content)) {
+            // JSON object(s) in the wrapper: flat or nested, lenient (a trailing
+            // extra brace still parses), one or several concatenated.
+            for (const { value } of this._scanJSONObjects(match[1])) {
                 const call = this._normalizeCall(value);
                 if (call) calls.push(call);
             }
         }
-
         return calls;
     }
 
     /**
      * Remove recovered tool-call text from content before it is shown to the user
-     * (#295). Strips both wrappers (closed, or unclosed to EOF), then excises any
-     * bare tool-call JSON objects the parser would have recognized. Spans are
-     * removed back-to-front so earlier indices stay valid.
+     * (#295): both wrappers, closed or unclosed to EOF.
      */
     stripEmbeddedCalls(content) {
         if (!content) return content;
-        let out = content
+        return content
             .replace(/<tool_c(?:all|ode)>[\s\S]*?<\/tool_c(?:all|ode)>/gi, '')
-            .replace(/<tool_c(?:all|ode)>[\s\S]*$/gi, '');
-        const spans = this._scanJSONObjects(out).filter(o => this._normalizeCall(o.value));
-        for (let i = spans.length - 1; i >= 0; i--) {
-            out = out.slice(0, spans[i].start) + out.slice(spans[i].end + 1);
-        }
-        return out.trim();
-    }
-
-    /**
-     * Extract one or more calls from a single wrapper's inner blob (#295). Tries
-     * JSON objects first (one or several concatenated), then the non-JSON shapes.
-     */
-    _pushEmbeddedCall(inner, calls) {
-        // JSON object(s): flat or nested, lenient (a trailing extra brace still parses).
-        let found = false;
-        for (const { value } of this._scanJSONObjects(inner)) {
-            const call = this._normalizeCall(value);
-            if (call) { calls.push(call); found = true; }
-        }
-        if (found) return;
-
-        // Function-call shape: tool_name({"arg": "val"})
-        const funcMatch = inner.match(/^(\w+)\s*\(([\s\S]+)\)$/);
-        if (funcMatch) {
-            const args = this.parseLenientJSON(funcMatch[2]);
-            if (args !== undefined) { calls.push({ name: funcMatch[1], args }); return; }
-        }
-
-        // Hermes/pythonic `<function=NAME>…` dialect (#295), incl. the corrupted
-        // `<function=query", "arguments": {…}` form observed live on qwen/nimbus —
-        // the sole failure mode still leaking under the #288 net. Take the name
-        // from the tag, then the first JSON object after it as args, unwrapping a
-        // lone {"arguments"|"parameters": {…}} envelope.
-        const fnTag = inner.match(/<function=(\w+)/);
-        if (fnTag) {
-            const rest = inner.slice(fnTag.index + fnTag[0].length);
-            const objs = this._scanJSONObjects(rest);
-            let args = objs.length ? objs[0].value : {};
-            if (args && typeof args === 'object' && !Array.isArray(args)) {
-                const keys = Object.keys(args);
-                if (keys.length === 1 && (keys[0] === 'arguments' || keys[0] === 'parameters')
-                    && args[keys[0]] && typeof args[keys[0]] === 'object') {
-                    args = args[keys[0]];
-                }
-            } else {
-                args = {};
-            }
-            calls.push({ name: fnTag[1], args });
-            return;
-        }
-
-        // Lone quoted name against a known tool: {"list_datasets"}
-        const bareName = inner.match(/^\{\s*"(\w+)"\s*\}$/);
-        if (bareName && this.toolRegistry.has(bareName[1])) {
-            calls.push({ name: bareName[1], args: {} });
-            return;
-        }
-
-        // Simple name
-        if (/^\w+$/.test(inner) && this.toolRegistry.has(inner)) {
-            calls.push({ name: inner, args: {} });
-        }
+            .replace(/<tool_c(?:all|ode)>[\s\S]*$/gi, '')
+            .trim();
     }
 
     /**
      * Normalize a parsed JSON value into {name, args} if it is a tool call, else
      * null (#295). Accepts both the flat shape and the nested OpenAI
      * {"type":"function","function":{…}} shape, and `parameters` as an alias for
-     * `arguments`. Signature-gated for the bare-JSON path: a flat object with no
-     * args key and an unregistered name is rejected so stray JSON in a final answer
-     * is not swallowed as a call.
+     * `arguments`. Signature-gated: a flat object with no args key and an
+     * unregistered name is rejected, so stray JSON in a wrapper is not taken as
+     * a call.
      */
     _normalizeCall(parsed) {
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
@@ -1295,7 +1227,6 @@ export class Agent {
      * (#288, failure mode 2). A malformed `arguments` string left verbatim in the
      * assistant message poisons the next upstream request. We parse leniently and
      * re-serialize; anything unrecoverable becomes `{}` so history stays valid.
-     * Also recovers per-argument dialect leaks (#313, see scrubArgDialectLeaks).
      * Mutates the message in place.
      */
     normalizeToolCallArguments(message) {
@@ -1305,50 +1236,12 @@ export class Agent {
             const raw = tc.function.arguments;
             // A string is parsed leniently (recovers the #288 extra-brace case);
             // some backends hand back an object directly. Anything unrecoverable
-            // becomes {}. Scrub arg-dialect leaks out of the parsed object before
-            // re-serializing, so both history and execution see the real values.
+            // becomes {}.
             const parsed = typeof raw === 'string'
                 ? (this.parseLenientJSON(raw) ?? {})
                 : (raw ?? {});
-            tc.function.arguments = JSON.stringify(this.scrubArgDialectLeaks(parsed));
+            tc.function.arguments = JSON.stringify(parsed);
         }
-    }
-
-    /**
-     * Recover a per-argument tool-call dialect leak (#313). Some backends
-     * (observed live on `z-ai/glm-5.2`) serialize a structured argument's *value*
-     * in an XML arg dialect — `<arg_key>NAME</arg_key> <arg_value>{…}</arg_value>`
-     * (or `<parameter=NAME>…</parameter>`) — which arrives as a JSON *string*
-     * rather than the parsed object. The outer `arguments` blob is otherwise valid
-     * JSON, so the parse in normalizeToolCallArguments succeeds and the leak reaches
-     * the tool as a string that fails its schema (e.g. add_hex_tile_layer rejecting
-     * a `value_stats` string). The real payload is intact inside the wrapper — this
-     * unwraps it. Defense-in-depth: the durable fix normalizes the dialect at the
-     * server/proxy (see docs/design/tool-call-parsing.md and open-llm-proxy#85).
-     *
-     * Only string values carrying an `<arg_value>` / `<parameter …>` marker are
-     * touched: the payload after the marker is parsed as JSON when it's an
-     * object/array, else taken as a plain scalar (trailing close tag stripped).
-     * A missing/mismatched close tag is tolerated, matching parseEmbeddedToolCalls.
-     * Values with no marker are left byte-for-byte unchanged. Mutates and returns.
-     */
-    scrubArgDialectLeaks(args) {
-        if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
-        for (const key of Object.keys(args)) {
-            const v = args[key];
-            if (typeof v !== 'string') continue;
-            const marker = v.match(/<(?:arg_value|parameter\b[^>]*)>/i);
-            if (!marker) continue;
-            const after = v.slice(marker.index + marker[0].length);
-            const parsed = this.parseLenientJSON(after);
-            if (parsed && typeof parsed === 'object') {
-                args[key] = parsed;
-                continue;
-            }
-            const scalar = after.replace(/<\/(?:arg_value|parameter)>\s*$/i, '').trim();
-            if (scalar) args[key] = scalar;
-        }
-        return args;
     }
 
     /**

@@ -67,19 +67,6 @@ describe('parseEmbeddedToolCalls — tolerant extraction (#288)', () => {
         expect(calls).toEqual([{ name: 'set_filter', args: { expr: ['<', 5] } }]);
     });
 
-    it('parses the function-call shape: name({...})', () => {
-        const a = agentFor();
-        const calls = a.parseEmbeddedToolCalls(
-            '<tool_call>get_schema({"dataset_id": "ebsa"})</tool_call>');
-        expect(calls).toEqual([{ name: 'get_schema', args: { dataset_id: 'ebsa' } }]);
-    });
-
-    it('parses a bare known tool name with no args', () => {
-        const a = agentFor();
-        const calls = a.parseEmbeddedToolCalls('<tool_call>query</tool_call>');
-        expect(calls).toEqual([{ name: 'query', args: {} }]);
-    });
-
     it('parses multiple embedded calls in one message', () => {
         const a = agentFor();
         const calls = a.parseEmbeddedToolCalls(
@@ -119,26 +106,9 @@ describe('parseEmbeddedToolCalls — dialect tolerance (#295)', () => {
         expect(calls).toEqual([{ name: 'clear_filter', args: { layer_id: 'barred-owl/nso-ccap' } }]);
     });
 
-    it('recovers a lone quoted name against a known tool: {"list_datasets"}', () => {
-        const a = agentFor();
-        const calls = a.parseEmbeddedToolCalls('<tool_call>{"list_datasets"}');
-        expect(calls).toEqual([{ name: 'list_datasets', args: {} }]);
-    });
-
     it('yields nothing on truly-garbled content (recovery path handles it)', () => {
         const a = agentFor();
         expect(a.parseEmbeddedToolCalls('<tool_call>{"function_call> </function_call>')).toEqual([]);
-    });
-
-    it('parses bare (unwrapped), concatenated nested calls with parameters alias', () => {
-        const a = agentFor();
-        const calls = a.parseEmbeddedToolCalls(
-            '{"type": "function", "function": {"name": "query", "parameters": {"sql_query": "SELECT 1"}}}'
-            + '{"type": "function", "function": {"name": "query", "parameters": {"sql_query": "SELECT 2"}}}');
-        expect(calls).toEqual([
-            { name: 'query', args: { sql_query: 'SELECT 1' } },
-            { name: 'query', args: { sql_query: 'SELECT 2' } },
-        ]);
     });
 
     it('parses the nested OpenAI shape inside a <tool_call> wrapper', () => {
@@ -160,26 +130,6 @@ describe('parseEmbeddedToolCalls — dialect tolerance (#295)', () => {
             { name: 'query', args: { sql_query: 'SELECT 1' } },
             { name: 'query', args: { sql_query: 'SELECT 2' } },
         ]);
-    });
-
-    it('parses the Hermes <function=NAME> dialect, incl. the corrupted live form', () => {
-        const a = agentFor();
-        // Verbatim from barred-owl/qwen proxy logs — the one dialect that still
-        // leaked under the #288 recovery net before this handler.
-        const calls = a.parseEmbeddedToolCalls(
-            '<tool_call>\n<function=query", "arguments": {"sql_query": "SELECT DISTINCT i.HEXID '
-            + "FROM read_parquet('s3://public-barred-owl/inputs/hex/h0=*/data_0.parquet') i "
-            + 'WHERE i.nso_ccap = 20"}}\n</tool_call>');
-        expect(calls).toEqual([{ name: 'query', args: {
-            sql_query: "SELECT DISTINCT i.HEXID FROM read_parquet('s3://public-barred-owl/inputs/hex/h0=*/data_0.parquet') i WHERE i.nso_ccap = 20",
-        } }]);
-    });
-
-    it('unwraps a lone arguments/parameters envelope in the <function=> dialect', () => {
-        const a = agentFor();
-        const calls = a.parseEmbeddedToolCalls(
-            '<tool_call><function=get_schema>\n{"parameters": {"dataset_id": "barred-owl"}}</function></tool_call>');
-        expect(calls).toEqual([{ name: 'get_schema', args: { dataset_id: 'barred-owl' } }]);
     });
 
     it('does NOT misread stray JSON in a plain final answer as a call', () => {
@@ -205,13 +155,6 @@ describe('stripEmbeddedCalls — display cleanup (#295)', () => {
         expect(a.stripEmbeddedCalls(
             'One moment.\n<tool_call>{"name": "query", "arguments": {"sql": "select 1"}}'))
             .toBe('One moment.');
-    });
-
-    it('excises bare tool-call JSON so it does not echo to the user', () => {
-        const a = agentFor();
-        expect(a.stripEmbeddedCalls(
-            'Running the query. {"type": "function", "function": {"name": "query", "parameters": {"sql_query": "SELECT 1"}}}'))
-            .toBe('Running the query.');
     });
 
     it('leaves a genuine final answer (with incidental JSON) intact', () => {
@@ -433,52 +376,6 @@ describe('agent loop — malformed-call recovery (#288 failure mode 1/3)', () =>
 // dialect. Observed live on z-ai/glm-5.2 (ca-30x30, 2026-07-14): value_stats
 // arrived as "<arg_key>value_stats</arg_key> <arg_value>{…}</arg_value>", the
 // data intact inside the wrapper, and add_hex_tile_layer rejected the string.
-const GLM_LEAK = '<arg_key>value_stats</arg_key> <arg_value>{"by_res": {"2": {"min": 0.46, "max": 9.45}}}';
-
-describe('scrubArgDialectLeaks (#313)', () => {
-    it('unwraps an <arg_value>-wrapped object back into structured JSON', () => {
-        const out = agentFor().scrubArgDialectLeaks({ value_column: 'x', value_stats: GLM_LEAK });
-        expect(out.value_stats).toEqual({ by_res: { '2': { min: 0.46, max: 9.45 } } });
-        expect(out.value_column).toBe('x'); // sibling scalar untouched
-    });
-
-    it('tolerates a present closing </arg_value> tag', () => {
-        const out = agentFor().scrubArgDialectLeaks({ v: `<arg_value>{"a":1}</arg_value>` });
-        expect(out.v).toEqual({ a: 1 });
-    });
-
-    it('unwraps a <parameter=NAME> scalar payload, stripping the close tag', () => {
-        const out = agentFor().scrubArgDialectLeaks({ sql: '<parameter=sql>SELECT 1</parameter>' });
-        expect(out.sql).toBe('SELECT 1');
-    });
-
-    it('leaves marker-free values byte-for-byte unchanged (incl. the empty string)', () => {
-        const obj = { value_stats: '', palette: 'viridis', n: 3, arr: [1, 2] };
-        expect(agentFor().scrubArgDialectLeaks(obj)).toEqual(
-            { value_stats: '', palette: 'viridis', n: 3, arr: [1, 2] });
-    });
-
-    it('is a no-op on non-objects', () => {
-        const a = agentFor();
-        expect(a.scrubArgDialectLeaks(null)).toBe(null);
-        expect(a.scrubArgDialectLeaks('str')).toBe('str');
-    });
-
-    it('recovers the leak end-to-end through normalizeToolCallArguments', () => {
-        const a = agentFor();
-        const argsStr = JSON.stringify({
-            tile_url: 'https://h/tiles/hex/abc/{z}/{x}/{y}.pbf',
-            value_column: 'conserved_hw_frac',
-            value_stats: GLM_LEAK,
-        });
-        const message = { role: 'assistant', tool_calls: [
-            { id: 'c1', type: 'function', function: { name: 'add_hex_tile_layer', arguments: argsStr } }] };
-        a.normalizeToolCallArguments(message);
-        const parsed = JSON.parse(message.tool_calls[0].function.arguments);
-        expect(parsed.value_stats).toEqual({ by_res: { '2': { min: 0.46, max: 9.45 } } });
-        expect(parsed.value_column).toBe('conserved_hw_frac');
-    });
-});
 
 describe('_isFailedResult (#313)', () => {
     const a = agentFor();
@@ -518,32 +415,6 @@ describe('agent loop — dialect-leak recovery + repeated-failure short-circuit 
             role: 'assistant', content: null,
             tool_calls: [{ id: 'c1', type: 'function', function: { name, arguments: argsStr } }],
         } }] }),
-    });
-
-    it('recovers a leaked value_stats so the tool executes with a real object', async () => {
-        const argsStr = JSON.stringify({
-            tile_url: 'https://h/tiles/hex/abc/{z}/{x}/{y}.pbf',
-            value_column: 'conserved_hw_frac',
-            value_stats: GLM_LEAK,
-        });
-        global.fetch = vi.fn()
-            .mockResolvedValueOnce(okToolCall('add_hex_tile_layer', argsStr))
-            .mockResolvedValueOnce(okText('Added the hex layer.'));
-        const captured = [];
-        const agent = agentFor({
-            isLocal: () => true, has: () => true,
-            execute: async (name, args) => {
-                captured.push(args);
-                return { success: true, name, result: '{"success":true,"layer_id":"hex-abc"}', source: 'local' };
-            },
-        });
-        agent.autoApprove = true;
-
-        const { response } = await agent.processMessage('map protected hardwood');
-
-        expect(captured).toHaveLength(1);
-        expect(captured[0].value_stats).toEqual({ by_res: { '2': { min: 0.46, max: 9.45 } } });
-        expect(response).toBe('Added the hex layer.');
     });
 
     it('nudges once then checkpoints when a failing call is repeated identically', async () => {
@@ -620,5 +491,36 @@ describe('agent loop — dialect-leak recovery + repeated-failure short-circuit 
         expect(result.checkpoint).toBeFalsy();
         expect(result.response).toContain('12%');
         expect(global.fetch.mock.calls.length).toBe(3);
+    });
+});
+describe('forms no longer parsed fall back to the re-prompt (glen-harness#3)', () => {
+    // Forms that fired only on models no longer configured (proxy-log replay,
+    // 2026-11-27). They are not parsed as calls, but the re-prompt still
+    // catches them, so they never reach the user as a final answer.
+    const agent = new Agent(
+        { llm_models: [{ value: 'm', endpoint: 'https://x/v1' }] },
+        { getToolsForLLM: () => [], has: (n) => ['query', 'get_schema', 'list_datasets'].includes(n), isLocal: () => false },
+    );
+    for (const text of [
+        '{"name": "list_datasets", "parameters": {}}',
+        '<tool_call>\n<function=query>\n<parameter=sql_query>\nSELECT 1\n</parameter>\n</function>\n</tool_call>',
+        '<tool_call>get_schema(dataset_id="x")',
+        '<tool_call>list_datasets</tool_call>',
+    ]) {
+        it(`does not parse, but re-prompts: ${text.slice(0, 40).replace(/\n/g, ' ')}`, () => {
+            expect(agent.parseEmbeddedToolCalls(text)).toEqual([]);
+            expect(agent.looksLikeAttemptedToolCall(text)).toBe(true);
+        });
+    }
+
+    it('still parses JSON in a <tool_call> wrapper, as NRP gpt-oss sends it', () => {
+        const calls = agent.parseEmbeddedToolCalls('<tool_call>{"name":"query","arguments":{"sql":"SELECT 1"}}</tool_call>');
+        expect(calls).toEqual([{ name: 'query', args: { sql: 'SELECT 1' } }]);
+    });
+
+    it('keeps argument values with markup as sent', () => {
+        const msg = { tool_calls: [{ id: 'c', type: 'function', function: { name: 'show_layer', arguments: '{"style":"<arg_value>{}"}' } }] };
+        agent.normalizeToolCallArguments(msg);
+        expect(JSON.parse(msg.tool_calls[0].function.arguments)).toEqual({ style: '<arg_value>{}' });
     });
 });
