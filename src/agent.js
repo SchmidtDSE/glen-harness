@@ -102,10 +102,10 @@ export class Agent {
         // true/false = user asked for reasoning on/off for subsequent turns. Reset to
         // null on model switch so each model starts from its own configured default.
         this.reasoningOverride = null;
-        // Runtime reasoning level for a model that takes one (#23), set by the
-        // host UI's level selector; one of the model's `reasoning_efforts`, or
-        // null for the configured default. Reset on model switch.
-        this.reasoningEffortOverride = null;
+        // Reasoning level the user picked in the host UI's selector (#23): one
+        // of the model's `reasoning_levels`, or null to let the model service
+        // apply its default. Reset on model switch.
+        this.reasoningLevelOverride = null;
         // Checkpoint thresholds: how many *remote* tool-call rounds before the
         // agent pauses to report progress and ask to continue. Auto-approve uses
         // the tighter value (the checkpoint is the user's periodic gate); manual
@@ -150,7 +150,7 @@ export class Agent {
         // Clear any per-conversation reasoning override so the newly-selected
         // model resolves from its own configured default.
         this.reasoningOverride = null;
-        this.reasoningEffortOverride = null;
+        this.reasoningLevelOverride = null;
     }
 
     /**
@@ -717,64 +717,62 @@ export class Agent {
     }
 
     /**
-     * Resolve the thinking-control payload for a turn. Emits `reasoning_effort`
-     * when the model has a level (see reasoningEffort), and `enable_thinking`
-     * (a normalized flag the open-llm-proxy maps to the correct per-backend
-     * chat-template knob) only when this model participates — i.e. the deployer
-     * enabled the toggle or set a default. Otherwise the key is omitted so the
-     * model's own default is untouched (no behavior change by default).
+     * Resolve the thinking-control payload for a turn.
      *
-     * Value precedence: per-conversation user override (the UI toggle) wins,
-     * then the configured default, then — for a toggle-capable model — `true`.
-     * This mirrors chat-ui's `reasoningState()` exactly, so what the 🧠 toggle
-     * shows and what we send can never disagree. See #283.
+     * A model that lists `reasoning_levels` is controlled by level (#23): when
+     * the user has picked one, the request carries `reasoning_level`, which
+     * open-llm-proxy translates into that model's own setting. Otherwise
+     * nothing is sent and the proxy applies its default level for the model.
+     * Such a model is never sent `enable_thinking`, because a raw field would
+     * override the proxy's translation.
+     *
+     * Any other model keeps the on/off control: `enable_thinking` (a
+     * normalized flag the proxy maps to the per-backend chat-template knob) is
+     * sent only when the deployer enabled the toggle or set a default. The
+     * user's toggle wins, then the configured default, then, for a
+     * toggle-capable model, `true`. This mirrors chat-ui's `reasoningState()`,
+     * so what the 🧠 toggle shows and what we send never disagree (#283).
      */
     _thinkingParams(modelConfig) {
+        if (this.reasoningLevels(modelConfig).length > 0) {
+            const picked = this.reasoningLevelOverride;
+            return picked && this.reasoningLevels(modelConfig).includes(picked) ? { reasoning_level: picked } : {};
+        }
         const capable = this._reasoningCapable(modelConfig);
         const dflt = this._reasoningDefault(modelConfig);
-        const effort = this.reasoningEffort(modelConfig);
-        const out = effort ? { reasoning_effort: effort } : {};
         // Untouched unless the deployer opted this model in somehow.
-        if (!capable && dflt === undefined) return out;
+        if (!capable && dflt === undefined) return {};
         let value;
         if (typeof this.reasoningOverride === 'boolean') value = this.reasoningOverride;
-        // A level the user picked also decides on/off for a model that takes
-        // both, so the two fields never disagree: 'none' is off.
-        else if (this.reasoningEffortOverride && effort) value = effort !== 'none';
         else if (typeof dflt === 'boolean') value = dflt;
         else value = capable ? true : undefined; // toggle shown → defaults on
-        return typeof value === 'boolean' ? { ...out, enable_thinking: value } : out;
+        return typeof value === 'boolean' ? { enable_thinking: value } : {};
     }
 
     /**
-     * The reasoning levels a model offers (#23): per-model `reasoning_efforts`,
-     * then the global one, as a list of strings such as
-     * `["none", "low", "medium", "high"]`. Empty when the model takes no level,
-     * as for NRP's vLLM models, which have only on/off (`reasoning_toggle`).
-     * The model service sets it in each model's settings (glen#542).
+     * The reasoning levels the model service can translate for this model
+     * (#23): `reasoning_levels` in the model's settings, a subset of `none`,
+     * `low`, `medium` and `high`, in that order. Empty when the model is not
+     * controlled by level. open-llm-proxy derives the list from its
+     * per-provider translation table (glen#542 puts each model's settings in
+     * its /models response).
      */
     reasoningLevels(modelConfig = this.getModelConfig()) {
-        const v = ('reasoning_efforts' in (modelConfig ?? {}))
-            ? modelConfig.reasoning_efforts
-            : this.config?.reasoning_efforts;
+        const v = modelConfig?.reasoning_levels;
         return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
     }
 
     /**
-     * The reasoning level to send as `reasoning_effort`, or undefined to send
-     * none (#23). The user's pick from the model's levels wins, then the
-     * per-model `reasoning_effort`, then the global one. open-llm-proxy
-     * forwards it unchanged (open-llm-proxy#205); the model server decides
-     * what it accepts, so it is set only for models that take one.
+     * The reasoning level in effect for display: the user's pick from the
+     * model's levels, else the model service's default (`reasoning_level` in
+     * the model's settings), else undefined for the model's own default.
      */
-    reasoningEffort(modelConfig = this.getModelConfig()) {
+    reasoningLevel(modelConfig = this.getModelConfig()) {
         const levels = this.reasoningLevels(modelConfig);
-        if (this.reasoningEffortOverride && levels.includes(this.reasoningEffortOverride)) {
-            return this.reasoningEffortOverride;
+        if (this.reasoningLevelOverride && levels.includes(this.reasoningLevelOverride)) {
+            return this.reasoningLevelOverride;
         }
-        const v = ('reasoning_effort' in (modelConfig ?? {}))
-            ? modelConfig.reasoning_effort
-            : this.config?.reasoning_effort;
+        const v = modelConfig?.reasoning_level;
         return typeof v === 'string' && v ? v : undefined;
     }
 
