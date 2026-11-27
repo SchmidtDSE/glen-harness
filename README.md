@@ -25,7 +25,7 @@ The harness in `src/` has no DOM code and no dependencies beyond the vendored MC
 
 ### Tool-use loop
 
-`processMessage` sends the system prompt, the conversation so far and the tool list to the model. When the reply contains tool calls, the agent runs them, adds the results to the conversation and calls the model again. It repeats until the model answers in text. Local tools always run without asking. Remote tools run once the host approves them through `onToolProposal`, or at once when auto-approve is on, which is the default. Each tool result is cut to 16,000 characters before it enters the conversation, so a large query result cannot fill the context window. When a turn ends, it stays in the conversation in a shorter form, so a follow-up question can see which numbers were computed and how. That form keeps the tool calls with their arguments, the first 1,000 characters of each result and the text the model wrote, and leaves out reasoning and the harness's own re-prompts. A turn is shortened once and not changed afterwards, so later requests keep the same prefix for the provider's prompt cache. Once the conversation passes 60,000 characters (`history_budget_chars`, per model or globally), the oldest turns are dropped, a few at a time, never splitting a tool call from its result. `abort()` stops the turn at its next await, including during the model request.
+`processMessage` sends the system prompt, the conversation so far and the tool list to the model. When the reply contains tool calls, the agent runs them, adds the results to the conversation and calls the model again. It repeats until the model answers in text. Local tools always run without asking. Remote tools run once the host approves them through `onToolProposal`, or at once when auto-approve is on, which is the default. Each tool result is cut to 16,000 characters before it enters the conversation, so a large query result cannot fill the context window. When a turn ends, it stays in the conversation in a shorter form, so a follow-up question can see which numbers were computed and how. That form keeps the tool calls with their arguments, the first 1,000 characters of each result and the text the model wrote, and leaves out reasoning and the harness's own re-prompts. A turn is shortened once and not changed afterwards, so later requests keep the same prefix for the provider's prompt cache. Once the conversation passes 60,000 characters (`history_budget_chars`) or 100 messages (`history_max_messages`), each set per model or globally, the oldest turns are dropped, a few at a time, never splitting a tool call from its result. The message limit keeps a request under open-llm-proxy's 200-message limit on its public tier. `abort()` stops the turn at its next await, including during the model request.
 
 ### Turn limits
 
@@ -64,7 +64,7 @@ The reasons for keeping this code are recorded in glen's [tool-call parsing desi
 | `ui/chat-docked.css` | Styles for the chat in a page column (geo-agent's sidebar look), coloured by CSS tokens a host can override, such as `--control-bg`. |
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.10.0';
 const [{ Agent, ToolRegistry }, { ChatUI, buildChatPanel, loadChatDeps }] =
     await Promise.all([import(`${H}/src/index.js`), import(`${H}/ui/index.js`)]);
 
@@ -127,7 +127,7 @@ With `authFailed` the chat says the data server needs a token and opens the pane
 An app whose tools all run in the page imports the `./core` entry (`src/core.js`) and the chat module:
 
 ```js
-const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1';
+const H = 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.10.0';
 const { Agent, ToolRegistry } = await import(`${H}/src/core.js`);
 const { ChatUI } = await import(`${H}/ui/chat-ui.js`);
 ```
@@ -139,10 +139,10 @@ These load nine files: `src/core.js`, `src/agent.js`, `src/tool-registry.js`, `s
 In a browser, import from jsDelivr pinned to a tag. There is no build step.
 
 ```js
-import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.9.1/src/index.js';
+import { Agent, ToolRegistry, MCPClient } from 'https://cdn.jsdelivr.net/gh/SchmidtDSE/glen-harness@v0.10.0/src/index.js';
 ```
 
-In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.9.1`), as the package is not yet on npm:
+In Node 20 or later, the same files run directly. Install from git (`npm install github:SchmidtDSE/glen-harness#v0.10.0`), as the package is not yet on npm:
 
 ```js
 import { Agent, ToolRegistry, MCPClient } from 'glen-harness';

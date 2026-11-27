@@ -81,6 +81,11 @@ const HISTORY_BUDGET_CHARS = 60000;
 // dropped now and then, not on every turn, which would change the cached
 // prefix each time.
 const HISTORY_TARGET_SHARE = 0.75;
+// The most history messages sent with a turn. open-llm-proxy rejects a request
+// with more than 200 messages on its public tier (413, open-llm-proxy#164), and
+// the turn's own calls and results need room on top of the history. Override
+// with `history_max_messages`, per model or globally.
+const HISTORY_MAX_MESSAGES = 100;
 
 export class Agent {
     /**
@@ -1551,22 +1556,38 @@ export class Agent {
 
     /**
      * Keep history within the budget before a new turn is sent. When it is
-     * over, drop the oldest turns until it is under HISTORY_TARGET_SHARE of
-     * the budget. The current turn and the one before it are never dropped.
+     * over, or has more than `history_max_messages` messages, drop the oldest
+     * turns until both are under HISTORY_TARGET_SHARE of their limits. The
+     * current turn and the one before it are never dropped.
      */
     _fitHistory(modelConfig) {
         const budget = this._historyBudget(modelConfig);
+        const maxMessages = this._historyMaxMessages(modelConfig);
         const size = (m) => JSON.stringify(m).length;
         let total = this.messages.reduce((n, m) => n + size(m), 0);
-        if (total <= budget) return;
+        let count = this.messages.length;
+        if (total <= budget && count <= maxMessages) return;
         const target = budget * HISTORY_TARGET_SHARE;
+        const targetCount = Math.floor(maxMessages * HISTORY_TARGET_SHARE);
         const starts = this._turnStarts();
         let cut = 0;
-        for (let t = 0; t < starts.length - 2 && total > target; t++) {
+        for (let t = 0; t < starts.length - 2 && (total > target || count > targetCount); t++) {
             for (let i = starts[t]; i < starts[t + 1]; i++) total -= size(this.messages[i]);
+            count -= starts[t + 1] - starts[t];
             cut = starts[t + 1];
         }
         if (cut > 0) this.messages.splice(0, cut);
+    }
+
+    /**
+     * The most history messages: per-model `history_max_messages`, then the
+     * global setting, then HISTORY_MAX_MESSAGES.
+     */
+    _historyMaxMessages(modelConfig) {
+        const n = ('history_max_messages' in (modelConfig ?? {}))
+            ? modelConfig.history_max_messages
+            : this.config?.history_max_messages;
+        return Number.isFinite(n) && n > 0 ? n : HISTORY_MAX_MESSAGES;
     }
 
     /**
