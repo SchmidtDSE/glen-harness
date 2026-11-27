@@ -56,6 +56,18 @@ const OFFER = /\b(?:want me to|would you like|should i|shall i|if you(?:'d| woul
 // can see.
 const RECOVERED_CALLS = new WeakMap();
 
+// Tools whose result for the same arguments cannot change within a turn: SQL
+// and metadata lookups. A repeat of one that already succeeded in the turn is
+// not run again (glen-harness#19, #37). Other tools, such as a poll for a
+// long-running job, are always run. Override with `repeat_skip_tools`.
+const REPEAT_SKIP_TOOLS = ['query', 'get_schema', 'get_stac_details', 'get_collection', 'browse_stac_catalog'];
+// Skipped repeats in one turn before it stops at a checkpoint: a model that
+// keeps re-asking for results it already has is going in circles.
+const MAX_REPEAT_SKIPS = 2;
+// Times the same call may return the same result in a row before the turn
+// stops at a checkpoint (#37). High enough for a poll that waits on a job.
+const MAX_SAME_RESULT = 8;
+
 // Messages the harness adds within a turn to steer the model (a re-prompt
 // after an unparseable call or a repeated failure, the checkpoint request).
 // They are left out when the turn is kept as history.
@@ -279,13 +291,17 @@ export class Agent {
         // the last all-failed round and how many times it has repeated since.
         let repeatedFailureStreak = 0;
         let lastFailedRoundSig = null;
-        // Repeated-success short-circuit (glen-harness#19). A model that
-        // re-issues the byte-identical call(s) that just succeeded is not making
-        // progress either: the result is already in its context. The first
-        // repeat is not run; the model is told to use the earlier result. A
-        // second repeat checkpoints.
-        let lastSucceededRoundSig = null;
-        let repeatedSuccessStreak = 0;
+        // Repeated-success short-circuit (glen-harness#19, #37). A call to a
+        // lookup tool (REPEAT_SKIP_TOOLS) that already succeeded with the same
+        // arguments in this turn is not run again: its result is in context.
+        // That catches cycles such as A, B, A, B, not only back-to-back
+        // repeats. After MAX_REPEAT_SKIPS skips the turn checkpoints. Any other
+        // tool runs, but the same call returning the same result
+        // MAX_SAME_RESULT times in a row checkpoints too.
+        const succeeded = new Set();          // call signatures that succeeded this turn
+        const lastResult = new Map();         // call signature -> { result, times }
+        let repeatSkips = 0;
+        const skipTools = new Set(this.config?.repeat_skip_tools ?? REPEAT_SKIP_TOOLS);
         // Empty-reply retries this turn (glen-harness#25): a reply with no text
         // and no tool call, usually reasoning that broke off, is asked for again
         // once before the turn gives up.
@@ -358,21 +374,27 @@ export class Agent {
                 if (toolCalls.length === 0) RECOVERED_CALLS.set(message, calls);
 
                 const roundSig = JSON.stringify(calls.map(c => [c.function?.name, c.function?.arguments]));
-                repeatedSuccessStreak = roundSig === lastSucceededRoundSig ? repeatedSuccessStreak + 1 : 0;
-                if (repeatedSuccessStreak === 1) {
+                const callSig = (c) => JSON.stringify([c.function?.name, c.function?.arguments]);
+
+                // Lookups already answered this turn are not run again.
+                const repeats = calls.filter(c => skipTools.has(c.function?.name) && succeeded.has(callSig(c)));
+                if (repeats.length > 0 && repeats.length === calls.length) {
+                    repeatSkips++;
                     for (const tc of calls) {
                         turnMessages.push({
                             role: 'tool',
                             tool_call_id: tc.id,
-                            content: `You already called ${tc.function?.name} with these arguments, and the `
-                                + 'result is in the earlier tool message. It was not run again. Use that '
+                            content: `You already called ${tc.function?.name} with these arguments in this turn, `
+                                + 'and the result is in an earlier tool message. It was not run again. Use that '
                                 + 'result and continue, or answer the user.',
                         });
                     }
+                    console.info(`[Agent] Skipped a repeated call (${repeatSkips} this turn): `
+                        + calls.map(c => c.function?.name).join(', '));
+                    if (repeatSkips >= MAX_REPEAT_SKIPS) {
+                        return await this._checkpoint(endpoint, modelConfig, turn, iterations);
+                    }
                     continue;
-                }
-                if (repeatedSuccessStreak >= 2) {
-                    return await this._checkpoint(endpoint, modelConfig, turn, iterations);
                 }
 
                 // Classify: are all calls local (auto-approve) or mixed?
@@ -461,7 +483,25 @@ export class Agent {
                     ? repeatedFailureStreak + 1
                     : 0;
                 lastFailedRoundSig = roundFailed ? roundSig : null;
-                lastSucceededRoundSig = roundFailed ? null : roundSig;
+
+                // Remember which calls succeeded, and stop a call that keeps
+                // returning the same result (#37).
+                let noProgress = false;
+                calls.forEach((tc, i) => {
+                    const sig = callSig(tc);
+                    const r = results[i];
+                    if (r && !this._isFailedResult(r)) succeeded.add(sig);
+                    const text = typeof r?.result === 'string' ? r.result : JSON.stringify(r?.result ?? '');
+                    const prev = lastResult.get(sig);
+                    const times = prev && prev.result === text ? prev.times + 1 : 1;
+                    lastResult.set(sig, { result: text, times });
+                    if (times >= MAX_SAME_RESULT) noProgress = true;
+                });
+                if (noProgress) {
+                    console.info('[Agent] The same call returned the same result '
+                        + `${MAX_SAME_RESULT} times; stopping at a checkpoint`);
+                    return await this._checkpoint(endpoint, modelConfig, turn, iterations);
+                }
                 if (repeatedFailureStreak === 1) {
                     const errText = (results.find(r => this._isFailedResult(r))?.result || '').slice(0, 300);
                     turnMessages.push(harnessPrompt(
