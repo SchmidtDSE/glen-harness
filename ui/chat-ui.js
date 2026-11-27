@@ -689,7 +689,7 @@ export class ChatUI {
             const showLevels = levels.length >= 2;
             select.style.display = showLevels ? '' : 'none';
             if (showLevels) {
-                this._fillReasoningLevels(select, levels, this.agent.reasoningEffort(mc));
+                this._fillReasoningLevels(select, levels, this.agent.reasoningLevel(mc));
                 btn.style.display = 'none';
                 return;
             }
@@ -723,7 +723,7 @@ export class ChatUI {
         select.setAttribute('aria-label', 'Reasoning level');
         select.style.display = 'none';
         select.addEventListener('change', () => {
-            this.agent.reasoningEffortOverride = select.value || null;
+            this.agent.reasoningLevelOverride = select.value || null;
             this.syncReasoningToggle();
         });
 
@@ -736,12 +736,13 @@ export class ChatUI {
 
     /**
      * Fill the level selector with a model's levels and select the one in
-     * effect. With no level configured, a "default" entry stands for the
-     * model's own default, so the selector never shows a level not being sent.
+     * effect: the user's pick, else the model service's default level.
      */
     _fillReasoningLevels(select, levels, current) {
-        // A configured default outside the list is shown too, since it is sent.
-        const values = current ? (levels.includes(current) ? levels : [current, ...levels]) : ['', ...levels];
+        // Without a known default, a "default" entry stands for whatever the
+        // model service applies, so the selector never claims a level.
+        const known = current && levels.includes(current);
+        const values = known ? levels : ['', ...levels];
         const key = values.join('|');
         if (select.dataset.levels !== key) {
             select.replaceChildren(...values.map(v => {
@@ -752,7 +753,7 @@ export class ChatUI {
             }));
             select.dataset.levels = key;
         }
-        select.value = current || '';
+        select.value = known ? current : '';
     }
 
     /* ------------------------------------------------------------------ */

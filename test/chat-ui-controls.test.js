@@ -145,7 +145,7 @@ describe('ChatUI reasoning toggle (#283)', () => {
     });
 
     it('shows a level selector in place of the toggle for a model with levels (#23)', () => {
-        const ui = makeUI([{ value: 'r', endpoint: 'e', reasoning_efforts: ['none', 'low', 'high'], reasoning_effort: 'high' }]);
+        const ui = makeUI([{ value: 'r', endpoint: 'e', reasoning_levels: ['none', 'low', 'high'], reasoning_level: 'high' }]);
         ui.initReasoningToggle();
         expect(ui.reasoningBtn.style.display).toBe('none');
         expect(ui.reasoningSelect.style.display).toBe('');
@@ -154,12 +154,12 @@ describe('ChatUI reasoning toggle (#283)', () => {
 
         ui.reasoningSelect.value = 'low';
         ui.reasoningSelect.dispatchEvent(new Event('change'));
-        expect(ui.agent.reasoningEffortOverride).toBe('low');
-        expect(ui.agent.reasoningEffort()).toBe('low');
+        expect(ui.agent.reasoningLevelOverride).toBe('low');
+        expect(ui.agent.reasoningLevel()).toBe('low');
     });
 
     it('offers "default" when the model has levels but no configured level (#23)', () => {
-        const ui = makeUI([{ value: 'r', endpoint: 'e', reasoning_efforts: ['low', 'high'] }]);
+        const ui = makeUI([{ value: 'r', endpoint: 'e', reasoning_levels: ['low', 'high'] }]);
         ui.initReasoningToggle();
         expect([...ui.reasoningSelect.options].map(o => o.textContent)).toEqual(['🧠 default', '🧠 low', '🧠 high']);
         expect(ui.reasoningSelect.value).toBe('');
