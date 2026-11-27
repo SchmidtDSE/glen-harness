@@ -75,19 +75,72 @@ describe('repeated successful call (glen-harness#19)', () => {
         expect(result.response).toBe('26,471,459 acres.');
     });
 
-    it('runs the same call again when another call came between', async () => {
+    it('skips a lookup repeated later in the turn, and checkpoints on an A, B, A, B cycle (#37)', async () => {
         const execute = vi.fn(async () => ({ success: true, result: 'ok' }));
         mockLLM(
-            call('c1'),
-            call('c2', 'query', { sql_query: 'SELECT 1' }),
-            call('c3'),
-            text('done'),
+            call('c1'),                                         // get_schema: runs
+            call('c2', 'query', { sql_query: 'SELECT 1' }),     // runs
+            call('c3'),                                         // get_schema again: skipped (1)
+            call('c4', 'query', { sql_query: 'SELECT 1' }),     // query again: skipped (2) → checkpoint
+            text('Summary: going in circles.'),
         );
         const agent = makeAgent(execute);
 
-        await agent.processMessage('q');
+        const result = await agent.processMessage('q');
 
+        expect(execute).toHaveBeenCalledTimes(2);
+        expect(result.checkpoint).toBe(true);
+    });
+
+    it('runs a round that mixes a repeated lookup with a new call', async () => {
+        const execute = vi.fn(async () => ({ success: true, result: 'ok' }));
+        mockLLM(
+            call('c1'),
+            reply({ content: null, tool_calls: [
+                { id: 'c2', type: 'function', function: { name: 'get_schema', arguments: JSON.stringify({ dataset_id: 'ca30x30' }) } },
+                { id: 'c3', type: 'function', function: { name: 'query', arguments: JSON.stringify({ sql_query: 'SELECT 2' }) } },
+            ] }),
+            text('done'),
+        );
+        const agent = makeAgent(execute);
+        await agent.processMessage('q');
         expect(execute).toHaveBeenCalledTimes(3);
+    });
+
+    it('always runs a tool outside the lookup list, such as a poll for a running job', async () => {
+        const polls = ['{"status":"running"}', '{"status":"running"}', '{"status":"running"}', '{"status":"done","auc":0.91}'];
+        const execute = vi.fn(async () => ({ success: true, result: polls.shift() }));
+        const poll = (id) => call(id, 'get_sdm_result', { run_id: 'r1', wait_seconds: 60 });
+        mockLLM(poll('p1'), poll('p2'), poll('p3'), poll('p4'), text('AUC 0.91.'));
+        const agent = makeAgent(execute);
+
+        const result = await agent.processMessage('fit it');
+
+        expect(execute).toHaveBeenCalledTimes(4);
+        expect(result.response).toBe('AUC 0.91.');
+    });
+
+    it('checkpoints when the same call keeps returning the same result (#37)', async () => {
+        const execute = vi.fn(async () => ({ success: true, result: '{"status":"running"}' }));
+        const poll = (id) => call(id, 'get_sdm_result', { run_id: 'r1', wait_seconds: 60 });
+        mockLLM(...Array.from({ length: 8 }, (_, i) => poll(`p${i}`)), text('Summary: still running.'));
+        const agent = makeAgent(execute);
+
+        const result = await agent.processMessage('fit it');
+
+        expect(execute).toHaveBeenCalledTimes(8);
+        expect(result.checkpoint).toBe(true);
+    });
+
+    it('takes the list of lookup tools from repeat_skip_tools', async () => {
+        const execute = vi.fn(async () => ({ success: true, result: 'ok' }));
+        mockLLM(call('c1'), call('c2'), text('done'));
+        const agent = new Agent(
+            { llm_models: [{ value: 'm', endpoint: 'https://x/v1' }], repeat_skip_tools: [] },
+            { getToolsForLLM: () => [], isLocal: () => false, has: () => true, execute },
+        );
+        await agent.processMessage('q');
+        expect(execute).toHaveBeenCalledTimes(2);
     });
 });
 
