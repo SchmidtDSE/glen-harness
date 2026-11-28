@@ -25,6 +25,27 @@ export const STORAGE_KEY_MODEL = 'geo-agent-model';
 export const DEFAULT_USER_ENDPOINT = 'https://openrouter.ai/api/v1';
 
 /**
+ * The model a bring-your-own-key user starts on, per endpoint host, when they
+ * have not named one (glen-harness#30). Apps name no models (glen#542), so the
+ * harness keeps this one default per known endpoint: a model the benchmark
+ * tests. Update it in a release as models change. An endpoint not listed here
+ * has no default, and the user picks from its suggestions.
+ */
+export const DEFAULT_USER_MODELS = {
+    'openrouter.ai': 'deepseek/deepseek-v4.1-flash-1017',
+};
+
+/** The default model for an endpoint, or null when the harness knows none. */
+export function defaultUserModel(endpoint) {
+    try {
+        const host = new URL(endpoint).hostname.replace(/^www\./, '');
+        return DEFAULT_USER_MODELS[host] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * The `/models` URL that sits beside a chat-completions endpoint.
  * `/api/llm` → `/api/llm/models`; `…/v1/chat/completions` → `…/v1/models`.
  */
@@ -119,6 +140,9 @@ export function modelsFromTierList(list, { endpoint, apiKey } = {}) {
         const settings = entry.settings && typeof entry.settings === 'object' && !Array.isArray(entry.settings)
             ? entry.settings : {};
         const model = { ...settings, value: id, label: settings.label || id, endpoint };
+        // The model's context window, in tokens (open-llm-proxy#212), which
+        // sets its history limit (Agent._historyBudget).
+        if (Number.isFinite(entry.context_length) && entry.context_length > 0) model.context_length = entry.context_length;
         if (apiKey) model.api_key = apiKey;
         else delete model.api_key;
         models.push(model);
@@ -163,31 +187,26 @@ export async function applyProxyModelList(config, { fetchImpl } = {}) {
 }
 
 /**
- * Build the bring-your-own-key model list.
+ * Build the bring-your-own-key model list (#443, glen-harness#30): the one
+ * model the user named, or the endpoint's default (defaultUserModel), with
+ * the user's key and endpoint. The app names no models; its `llm.models`, if
+ * any, are ignored.
  *
- * @param {Object} llmConfig - the app's `llm` block (`models`, `default_endpoint`, `transcription_model`)
+ * @param {Object} llmConfig - the app's `llm` block (`default_endpoint`, `transcription_model`)
  * @param {Object} saved - `{apiKey, endpoint, model}` from localStorage
  * @returns {{llm_models: Array, llm_model: string, transcription_model?: Object}|null}
- *   null when no key is saved.
+ *   null when no key is saved, or no model is named and the endpoint has no default.
  */
 export function buildUserModels(llmConfig = {}, { apiKey, endpoint, model } = {}) {
     if (!apiKey) return null;
     const ep = endpoint || llmConfig.default_endpoint || DEFAULT_USER_ENDPOINT;
-    const custom = typeof model === 'string' ? model.trim() : '';
+    const id = (typeof model === 'string' ? model.trim() : '') || defaultUserModel(ep);
+    if (!id) return null;
 
-    const models = (llmConfig.models || []).map(m => ({ ...m, endpoint: ep, api_key: apiKey }));
-    if (custom) {
-        // The user's own id goes first and starts selected. If the app lists
-        // it too, keep that entry's settings (label, reasoning, sampling).
-        const i = models.findIndex(m => m.value === custom);
-        const entry = i >= 0 ? models.splice(i, 1)[0] : { value: custom, label: custom, endpoint: ep, api_key: apiKey };
-        models.unshift(entry);
-    }
-    if (models.length === 0) {
-        models.push({ value: 'auto', label: 'Auto', endpoint: ep, api_key: apiKey });
-    }
-
-    const result = { llm_models: models, llm_model: models[0].value };
+    const result = {
+        llm_models: [{ value: id, label: id, endpoint: ep, api_key: apiKey }],
+        llm_model: id,
+    };
 
     // Transcription model for voice input inherits the user's key and (by
     // default) the same endpoint. Either can be overridden per entry.
@@ -212,10 +231,25 @@ export function loadUserSettings(storage = globalThis.localStorage) {
 }
 
 /**
- * The model ids an endpoint's `/models` lists, for suggestions in the
- * settings panel. Empty on any failure.
+ * The models an endpoint's `/models` lists, as `{id, context_length}`, for
+ * the settings panel's suggestions and the history limit. Models the endpoint
+ * marks as unable to call tools are left out: OpenRouter lists
+ * `supported_parameters`, and an entry without `tools` there would fail on
+ * the first tool call (glen-harness#30). Entries that don't say are kept.
+ * Empty on any failure.
  */
-export async function fetchModelIds(endpoint, opts) {
+export async function fetchModelEntries(endpoint, opts) {
     const list = await fetchModelList(endpoint, opts);
-    return (list?.data || []).map(e => e?.id).filter(id => typeof id === 'string' && id);
+    return (list?.data || [])
+        .filter(e => typeof e?.id === 'string' && e.id)
+        .filter(e => !Array.isArray(e.supported_parameters) || e.supported_parameters.includes('tools'))
+        .map(e => ({
+            id: e.id,
+            ...(Number.isFinite(e.context_length) && e.context_length > 0 ? { context_length: e.context_length } : {}),
+        }));
+}
+
+/** The ids of the models fetchModelEntries returns. Empty on any failure. */
+export async function fetchModelIds(endpoint, opts) {
+    return (await fetchModelEntries(endpoint, opts)).map(e => e.id);
 }

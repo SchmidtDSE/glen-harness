@@ -12,7 +12,7 @@
 import { sqlArg } from '../src/tool-registry.js';
 import {
     DEFAULT_USER_ENDPOINT, STORAGE_KEY_API, STORAGE_KEY_ENDPOINT, STORAGE_KEY_MODEL,
-    buildUserModels, fetchModelIds, loadUserSettings,
+    buildUserModels, fetchModelEntries, loadUserSettings, defaultUserModel,
 } from '../src/llm-models.js';
 import { STORAGE_KEY_MCP_TOKEN } from '../src/mcp-token.js';
 import { githubIcon, leafIcon, micIcon, stopIcon } from './icons.js';
@@ -159,9 +159,14 @@ export class ChatUI {
         // If in user-provided API key mode, add settings button
         if (this.config._userProvidedMode) {
             this.initSettingsUI();
-            // If no API key saved yet, show the setup prompt
-            if (!this.config.llm_models?.length) {
+            // If no API key or model is saved yet, show the setup prompt;
+            // otherwise look up the model's context window for its history
+            // limit (glen-harness#30).
+            const userModel = this.config.llm_models?.[0];
+            if (!userModel) {
                 this.showSettingsPanel();
+            } else {
+                this._attachContextLength(userModel, userModel.api_key).catch(() => {});
             }
         }
 
@@ -512,9 +517,9 @@ export class ChatUI {
                    placeholder="https://openrouter.ai/api/v1" spellcheck="false">
             <label class="settings-label" for="settings-api-key">API Key</label>
             <input id="settings-api-key" type="password" placeholder="sk-..." spellcheck="false">
-            <label class="settings-label" for="settings-model">Model (optional)</label>
+            <label class="settings-label" for="settings-model">Model</label>
             <input id="settings-model" type="text" list="settings-model-options"
-                   placeholder="any model id your endpoint serves" spellcheck="false" autocomplete="off">
+                   spellcheck="false" autocomplete="off">
             <datalist id="settings-model-options"></datalist>` : ''}
             ${showMcp ? `
             <label class="settings-label" for="settings-mcp-token">Data server token</label>
@@ -525,7 +530,7 @@ export class ChatUI {
                 <button id="settings-cancel" class="settings-cancel-btn">Cancel</button>
             </div>
             <div class="settings-hint">
-                ${showLLM ? 'Keys are stored in your browser only and never sent to this server. Leave the model empty to choose from this app\'s list.' : ''}
+                ${showLLM ? '<span id="settings-llm-hint">Keys are stored in your browser only and never sent to this server.</span>' : ''}
                 ${showMcp ? 'The data server token is stored in your browser and sent only to the data server. Clear it to remove it.' : ''}
             </div>
         `;
@@ -553,7 +558,16 @@ export class ChatUI {
         // Typing any other id still works; a failed fetch leaves no suggestions.
         if (showLLM) {
             const endpointInput = field('#settings-endpoint');
-            const suggest = () => this._suggestModels(panel, endpointInput.value.trim(), savedKey);
+            const suggest = () => {
+                const ep = endpointInput.value.trim();
+                // The endpoint's default model fills the placeholder, so an
+                // empty field says what it will use (glen-harness#30).
+                const dflt = defaultUserModel(ep);
+                field('#settings-model').placeholder = dflt
+                    ? `${dflt} (default)`
+                    : 'a model id this endpoint serves';
+                this._suggestModels(panel, ep, savedKey);
+            };
             endpointInput.addEventListener('change', suggest);
             suggest();
         }
@@ -604,16 +618,17 @@ export class ChatUI {
     }
 
     /**
-     * Fill the settings panel's model suggestions from `<endpoint>/models`.
-     * The key is sent only to the endpoint the user typed, where it goes anyway.
+     * Fill the settings panel's model suggestions from `<endpoint>/models`:
+     * models that can call tools (fetchModelEntries). The key is sent only to
+     * the endpoint the user typed, where it goes anyway.
      */
     async _suggestModels(panel, endpoint, apiKey) {
         const list = panel.querySelector('#settings-model-options');
         if (!list) return;
         const token = (this._suggestToken = (this._suggestToken || 0) + 1);
-        const ids = endpoint ? await fetchModelIds(endpoint, { apiKey }) : [];
+        const entries = endpoint ? await fetchModelEntries(endpoint, { apiKey }) : [];
         if (token !== this._suggestToken) return;   // a newer endpoint was typed
-        list.replaceChildren(...ids.map(id => {
+        list.replaceChildren(...entries.map(({ id }) => {
             const opt = document.createElement('option');
             opt.value = id;
             return opt;
@@ -621,18 +636,35 @@ export class ChatUI {
     }
 
     /**
-     * Rebuild llm_models from localStorage and update the agent.
+     * Rebuild llm_models from localStorage and update the agent. The chosen
+     * model's context window, when its endpoint lists one, sets the history
+     * limit (glen-harness#30); that lookup finishes after the model is set.
      */
     applyUserLLMConfig() {
-        const built = buildUserModels(this.config.llm || {}, loadUserSettings());
-        if (!built) return;
+        const saved = loadUserSettings();
+        const built = buildUserModels(this.config.llm || {}, saved);
+        if (!built) {
+            this.config.llm_models = [];
+            this.config.llm_model = null;
+            this.populateModelSelector();
+            return;
+        }
 
         this.config.llm_models = built.llm_models;
         this.config.llm_model = built.llm_model;
+        if (built.transcription_model) this.config.transcription_model = built.transcription_model;
         this.agent.config = this.config;
         this.agent.setModel(this.config.llm_model);
         this.populateModelSelector();
         this.syncReasoningToggle();
+        return this._attachContextLength(built.llm_models[0], saved.apiKey);
+    }
+
+    /** Set a user model's `context_length` from its endpoint's list, if listed. */
+    async _attachContextLength(model, apiKey) {
+        const entries = await fetchModelEntries(model.endpoint, { apiKey });
+        const ctx = entries.find(e => e.id === model.value)?.context_length;
+        if (ctx) model.context_length = ctx;
     }
 
     /* ------------------------------------------------------------------ */
@@ -829,8 +861,9 @@ export class ChatUI {
             text = 'continue';
         }
 
-        // In user-provided mode, check for API key before sending
-        if (this.config._userProvidedMode && !localStorage.getItem(STORAGE_KEY_API)) {
+        // In user-provided mode, check for an API key and a model before sending
+        if (this.config._userProvidedMode
+            && (!localStorage.getItem(STORAGE_KEY_API) || !this.config.llm_models?.length)) {
             this.showSettingsPanel();
             return;
         }

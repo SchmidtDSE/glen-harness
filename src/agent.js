@@ -89,6 +89,10 @@ const HISTORY_ARGS_CHARS = 4000;
 // Past it the oldest turns are dropped. Override with `history_budget_chars`,
 // per model or globally.
 const HISTORY_BUDGET_CHARS = 60000;
+// The most of a model's context window history may take, when the model
+// service reports the window (`context_length`): 60,000 characters is about
+// 20k tokens, so this only lowers the budget for windows under about 80k.
+const HISTORY_WINDOW_SHARE = 0.25;
 // History over budget is brought down to this share of it, so turns are
 // dropped now and then, not on every turn, which would change the cached
 // prefix each time.
@@ -1452,13 +1456,22 @@ export class Agent {
 
     /**
      * The history budget in characters: per-model `history_budget_chars`,
-     * then the global setting, then HISTORY_BUDGET_CHARS.
+     * then the global setting. Otherwise HISTORY_BUDGET_CHARS, lowered for a
+     * model whose `context_length` (tokens) is small, so history takes at most
+     * HISTORY_WINDOW_SHARE of the window (at about 3 characters a token) and
+     * leaves the rest for the system prompt and the turn's own work
+     * (glen-harness#30).
      */
     _historyBudget(modelConfig) {
         const n = ('history_budget_chars' in (modelConfig ?? {}))
             ? modelConfig.history_budget_chars
             : this.config?.history_budget_chars;
-        return Number.isFinite(n) && n > 0 ? n : HISTORY_BUDGET_CHARS;
+        if (Number.isFinite(n) && n > 0) return n;
+        const ctx = modelConfig?.context_length;
+        if (Number.isFinite(ctx) && ctx > 0) {
+            return Math.max(1, Math.min(HISTORY_BUDGET_CHARS, Math.floor(ctx * 3 * HISTORY_WINDOW_SHARE)));
+        }
+        return HISTORY_BUDGET_CHARS;
     }
 
     /**

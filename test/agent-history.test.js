@@ -280,6 +280,14 @@ describe('history budget', () => {
         for (const body of sent) expectPairedToolMessages(body.messages);
     });
 
+    it('lowers the budget for a model with a small context window, and an explicit setting wins (#30)', () => {
+        const a = makeAgent();
+        expect(a._historyBudget({ context_length: 32000 })).toBe(24000);      // 25% of 32k tokens at 3 chars
+        expect(a._historyBudget({ context_length: 1048576 })).toBe(60000);    // capped at the default
+        expect(a._historyBudget({ context_length: 32000, history_budget_chars: 90000 })).toBe(90000);
+        expect(makeAgent({ history_budget_chars: 50000 })._historyBudget({ context_length: 32000 })).toBe(50000);
+    });
+
     it('reads the budget per model before the global setting', () => {
         const agent = makeAgent({ history_budget_chars: 1000 });
         expect(agent._historyBudget({ history_budget_chars: 50 })).toBe(50);

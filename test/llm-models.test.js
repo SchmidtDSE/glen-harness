@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
     modelsUrl, fetchModelList, modelEndpoint, modelsFromTierList, ModelListError,
-    applyProxyModelList, buildUserModels, loadUserSettings, fetchModelIds,
+    applyProxyModelList, buildUserModels, loadUserSettings, fetchModelIds, fetchModelEntries,
+    defaultUserModel, DEFAULT_USER_MODELS,
     STORAGE_KEY_API, STORAGE_KEY_ENDPOINT, STORAGE_KEY_MODEL,
 } from '../src/llm-models.js';
 import { Agent } from '../src/agent.js';
@@ -125,6 +126,12 @@ describe('modelsFromTierList (#444, glen#542)', () => {
     it('skips duplicate ids', () => {
         expect(modelsFromTierList(tierList({ data: [{ id: 'a' }, { id: 'a' }] }), { endpoint: '/e' }).models).toHaveLength(1);
     });
+
+    it('carries an entry\'s context_length onto the model (open-llm-proxy#212)', () => {
+        const { models } = modelsFromTierList(tierList({ data: [{ id: 'a', context_length: 131072 }, { id: 'b' }] }), { endpoint: '/e' });
+        expect(models[0].context_length).toBe(131072);
+        expect('context_length' in models[1]).toBe(false);
+    });
 });
 
 describe('applyProxyModelList (glen#542)', () => {
@@ -218,51 +225,51 @@ describe('applyProxyModelList (glen#542)', () => {
     });
 });
 
-describe('buildUserModels (#443)', () => {
-    const llm = {
-        default_endpoint: 'https://proxy.example/v1',
-        models: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B', reasoning_toggle: true }],
-    };
-
+describe('buildUserModels (#443, glen-harness#30)', () => {
     it('is null without a key', () => {
-        expect(buildUserModels(llm, { endpoint: 'x' })).toBeNull();
+        expect(buildUserModels({}, { endpoint: 'x' })).toBeNull();
     });
 
-    it('uses the app list with the user key and endpoint when no model is saved', () => {
-        const r = buildUserModels(llm, { apiKey: 'k', endpoint: 'https://mine/v1' });
-        expect(r.llm_models.map(m => m.value)).toEqual(['a', 'b']);
-        expect(r.llm_models.every(m => m.endpoint === 'https://mine/v1' && m.api_key === 'k')).toBe(true);
-        expect(r.llm_model).toBe('a');
-    });
-
-    it('falls back to default_endpoint, then OpenRouter', () => {
-        expect(buildUserModels(llm, { apiKey: 'k' }).llm_models[0].endpoint).toBe('https://proxy.example/v1');
-        expect(buildUserModels({}, { apiKey: 'k' }).llm_models[0].endpoint).toBe('https://openrouter.ai/api/v1');
-    });
-
-    it('puts a saved model id first and selects it, keeping the app list as suggestions', () => {
-        const r = buildUserModels(llm, { apiKey: 'k', model: ' anthropic/claude-x ' });
-        expect(r.llm_models.map(m => m.value)).toEqual(['anthropic/claude-x', 'a', 'b']);
-        expect(r.llm_models[0]).toMatchObject({ label: 'anthropic/claude-x', api_key: 'k' });
+    it('uses the model the user named, with their key and endpoint', () => {
+        const r = buildUserModels({}, { apiKey: 'k', endpoint: 'https://mine/v1', model: ' anthropic/claude-x ' });
+        expect(r.llm_models).toEqual([{ value: 'anthropic/claude-x', label: 'anthropic/claude-x', endpoint: 'https://mine/v1', api_key: 'k' }]);
         expect(r.llm_model).toBe('anthropic/claude-x');
     });
 
-    it('keeps the app entry\'s settings when the saved id is in the app list', () => {
-        const r = buildUserModels(llm, { apiKey: 'k', model: 'b' });
-        expect(r.llm_models.map(m => m.value)).toEqual(['b', 'a']);
-        expect(r.llm_models[0]).toMatchObject({ label: 'B', reasoning_toggle: true });
+    it('starts on the endpoint\'s default model when none is named', () => {
+        const r = buildUserModels({}, { apiKey: 'k' });
+        expect(r.llm_models[0]).toMatchObject({ value: DEFAULT_USER_MODELS['openrouter.ai'], endpoint: 'https://openrouter.ai/api/v1' });
+        expect(r.llm_model).toBe(DEFAULT_USER_MODELS['openrouter.ai']);
     });
 
-    it('offers Auto when the app lists no models and none is saved', () => {
-        expect(buildUserModels({}, { apiKey: 'k' }).llm_models.map(m => m.value)).toEqual(['auto']);
-        expect(buildUserModels({}, { apiKey: 'k', model: 'x' }).llm_models.map(m => m.value)).toEqual(['x']);
+    it('is null for an endpoint with no default when no model is named', () => {
+        expect(buildUserModels({}, { apiKey: 'k', endpoint: 'https://mine/v1' })).toBeNull();
+    });
+
+    it('ignores the app\'s own model list (apps name no models)', () => {
+        const r = buildUserModels({ models: [{ value: 'a' }, { value: 'b' }] }, { apiKey: 'k' });
+        expect(r.llm_models.map(m => m.value)).toEqual([DEFAULT_USER_MODELS['openrouter.ai']]);
+    });
+
+    it('uses default_endpoint when the user saved none', () => {
+        expect(buildUserModels({ default_endpoint: 'https://proxy.example/v1' }, { apiKey: 'k', model: 'm' }).llm_models[0].endpoint)
+            .toBe('https://proxy.example/v1');
     });
 
     it('gives the transcription model the user key and endpoint unless it sets its own', () => {
-        const r = buildUserModels({ transcription_model: { value: 'gemma-small' } }, { apiKey: 'k', endpoint: 'https://e' });
+        const r = buildUserModels({ transcription_model: { value: 'gemma-small' } }, { apiKey: 'k', endpoint: 'https://e', model: 'm' });
         expect(r.transcription_model).toEqual({ value: 'gemma-small', endpoint: 'https://e', api_key: 'k' });
         const own = buildUserModels({ transcription_model: { value: 't', endpoint: 'https://t', api_key: 'tk' } }, { apiKey: 'k' });
         expect(own.transcription_model).toMatchObject({ endpoint: 'https://t', api_key: 'tk' });
+    });
+});
+
+describe('defaultUserModel (glen-harness#30)', () => {
+    it('knows OpenRouter by host, and no other endpoint', () => {
+        expect(defaultUserModel('https://openrouter.ai/api/v1')).toBe(DEFAULT_USER_MODELS['openrouter.ai']);
+        expect(defaultUserModel('https://www.openrouter.ai/api/v1')).toBe(DEFAULT_USER_MODELS['openrouter.ai']);
+        expect(defaultUserModel('https://api.example.com/v1')).toBeNull();
+        expect(defaultUserModel('not a url')).toBeNull();
     });
 });
 
@@ -274,10 +281,20 @@ describe('loadUserSettings', () => {
     });
 });
 
-describe('fetchModelIds', () => {
+describe('fetchModelIds and fetchModelEntries (glen-harness#30)', () => {
     it('returns ids from any OpenAI-style list, empty on failure', async () => {
         expect(await fetchModelIds('https://openrouter.ai/api/v1', { fetchImpl: okFetch({ data: [{ id: 'a' }, { id: 'b' }, {}] }) }))
             .toEqual(['a', 'b']);
         expect(await fetchModelIds('https://x', { fetchImpl: async () => ({ ok: false }) })).toEqual([]);
+    });
+
+    it('leaves out models the endpoint marks as unable to call tools, and keeps the context window', async () => {
+        const list = { data: [
+            { id: 'tools', supported_parameters: ['tools', 'temperature'], context_length: 131072 },
+            { id: 'no-tools', supported_parameters: ['temperature'], context_length: 8192 },
+            { id: 'unknown' },
+        ] };
+        expect(await fetchModelEntries('https://openrouter.ai/api/v1', { fetchImpl: okFetch(list) }))
+            .toEqual([{ id: 'tools', context_length: 131072 }, { id: 'unknown' }]);
     });
 });
