@@ -9,7 +9,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write  # for the coverage report comment on PRs
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -19,10 +18,7 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run --coverage --coverage.include='{src,ui}/**' --coverage.reporter=json-summary --coverage.reporter=json --coverage.reporter=text
-      - name: Coverage report comment
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@2500dafcee7dd64f85ab689c0b83798a8359770e # v2.9.3
+      - run: pnpm test
 
   vendor:
     name: Vendored bundle matches its source
