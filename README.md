@@ -96,7 +96,7 @@ const agent = new Agent(config, registry);
 
 `Agent` itself still takes an explicit `llm_models` array, as the benchmark runner and the user-provided key mode build one directly.
 
-In the user-provided key mode (`llm.user_provided`), `buildUserModels(config.llm, loadUserSettings())` builds the list from the key, endpoint and optional model id the user saved in the chat's settings panel. A model id the user names goes first and starts selected; the panel suggests the ids the endpoint's `/models` lists. These are SchmidtDSE/glen#444 and glen#443.
+In the user-provided key mode (`llm.user_provided`), `buildUserModels(config.llm, loadUserSettings())` builds the model from the key, endpoint and model id the user saved in the chat's settings panel ([glen#443](https://github.com/SchmidtDSE/glen/issues/443), [#30](https://github.com/SchmidtDSE/glen-harness/issues/30)). Apps name no models here either: the app's `llm.models` is ignored. With no model named, the user starts on the endpoint's default from `DEFAULT_USER_MODELS`, which holds one model the benchmark tests for each known endpoint (OpenRouter's is `deepseek/deepseek-v4.1-flash-1017`) and is updated in releases as models change; an endpoint without one waits for the user to name a model. The panel suggests the models the endpoint's `/models` lists, leaving out those it marks as unable to call tools, and the chosen model's `context_length` from that list sets its history limit. A model with a `context_length` from the proxy's list gets the same treatment: history is held to a quarter of the window, at most 60,000 characters.
 
 ## MCP token for visitors
 
